@@ -598,11 +598,39 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 	jshort* dst  = (jshort *) KNI_GetRawArrayRegionPtr(dstArrayHandle, 0);
 	jshort* src  = (jshort *) KNI_GetRawArrayRegionPtr(srcArrayHandle, 0);
 	char* alpha = (char*) KNI_GetRawArrayRegionPtr(alphaArrayHandle, 0);
+	int directDst = ((unsigned long)dst < 0x0FUL);
 
 	//direct rendering to the screen
-	if (dst < 0xF) { // == NULL
+	if (directDst) {
 		dst = (jshort*) BG_BMP_RAM(0);
-		// iprintf("\x1b[19B dst =%p src=%p \n", dst, src);
+	}
+
+	/* DoJa v36 forced final-frame resize: the i-appli keeps its native
+	 * 240x240 coordinate system, but the completed frame is stretched to the
+	 * full Nintendo DS 256x192 screen. This avoids changing game logic, map
+	 * coordinates or input while removing the old 48-pixel crop.
+	 *
+	 * Ratios are exact: 240/256 = 15/16 and 240/192 = 5/4, so the hot loop
+	 * uses only multiply/shift operations. The final canvas is opaque. */
+	if (directDst && src != NULL && transp == 0 &&
+		srcW == 240 && srcH == 240 && dstW == 256 && dstH == 192 &&
+		dstX == 0 && dstY == 0) {
+		int outY;
+		for (outY = 0; outY < 192; outY++) {
+			int sourceY = ((outY * 5) + 2) >> 2;
+			int sourceRow = sourceY * 240;
+			int outputRow = outY * 256;
+			int outX;
+			for (outX = 0; outX < 256; outX++) {
+				int sourceX = ((outX * 15) + 7) >> 4;
+				dst[outputRow + outX] = src[sourceRow + sourceX];
+			}
+		}
+		/* KNI_EndHandles() is a lexical-scope macro.  Calling it here would
+		 * close the handle block at compile time and leave the normal blitter
+		 * outside the scope of alpha/clip/destination variables.  Jump to the
+		 * single common epilogue instead. */
+		goto blit_done;
 	}
 	//check the alpha channel exists
 	hasAlpha = 1;
@@ -726,6 +754,7 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 //	if ((opaqueDraws + transpDraws) % 10000 == 0) {
 //		iprintf("blit t:%i o:%i \n", transpDraws, opaqueDraws);
 //	}
+blit_done:
 	KNI_EndHandles(); 
 	KNI_ReturnVoid(); 
 }

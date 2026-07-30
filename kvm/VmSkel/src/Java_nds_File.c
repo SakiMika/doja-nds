@@ -11,10 +11,12 @@
 
 #include "standalone_game.h"
 
-/* Old libnds exposes dldiGetInternal(), while newer compatibility packages
- * may omit the declaration. A weak declaration keeps the source buildable;
- * a missing symbol simply disables persistent save instead of blocking boot. */
-extern const DISC_INTERFACE *dldiGetInternal(void) __attribute__((weak));
+/*
+ * libnds 2.x uses libdvm behind the libfat-compatible API.  Legacy private
+ * device getters are no longer exported to applications. Use fatInitDefault(),
+ * which asks libdvm to initialize and mount available DLDI and DSi-SD block
+ * devices as fat:/ and sd:/.
+ */
 
 /*
  * Keep the standalone target buildable even if an older metadata generator
@@ -25,7 +27,7 @@ extern const DISC_INTERFACE *dldiGetInternal(void) __attribute__((weak));
 #define STANDALONE_OUTPUT_BASENAME "standalone_game"
 #endif
 #ifndef STANDALONE_SAVE_PATH
-#define STANDALONE_SAVE_PATH "fat:/" STANDALONE_OUTPUT_BASENAME ".djs"
+#define STANDALONE_SAVE_PATH "fat:/" STANDALONE_OUTPUT_BASENAME ".sav"
 #endif
 #ifndef STANDALONE_RMS_SAVE_PATH
 #define STANDALONE_RMS_SAVE_PATH "fat:/" STANDALONE_OUTPUT_BASENAME ".rms"
@@ -415,106 +417,298 @@ static void pstrosMakeEmptyRms(unsigned char *data) {
 }
 
 /*
- * v25 never calls fatInitDefault(). That helper probes both the DSi SD and
- * DLDI interfaces; a broken/unimplemented SD backend can block forever before
- * the JVM starts. We mount only the launcher's DLDI interface as "fat:" and
- * then probe two equivalent paths on that one mounted volume.
+ * DoJa v36 same-name .sav storage selection.
+ *
+ * The v27-v30 backends called legacy private device getters directly. Those
+ * symbols are not exported by the current Calico/libdvm stack, so the final
+ * link failed even though every C file compiled.
+ *
+ * v36 keeps the supported libfat compatibility entry point fatInitDefault().
+ * On libnds 2.x this delegates to libdvm, initializes the block-device layer,
+ * and mounts DLDI as fat:/ plus DSi SD as sd:/ when available.  We first probe
+ * any volume already registered by the launcher, then initialize libdvm once,
+ * then repeat the same write/read verification.  Save writes continue to use
+ * normal stdio and never depend on private storage symbols.
  */
 static char pstrosSavePath[NDS_FILE_PATH_MAX + 1] = STANDALONE_SAVE_PATH;
 static char pstrosRmsSavePath[NDS_FILE_PATH_MAX + 1] = STANDALONE_RMS_SAVE_PATH;
+static char pstrosLaunchSavePath[NDS_FILE_PATH_MAX + 1] = "";
+static char pstrosSaveBackend[12] = "NONE";
 static int pstrosSaveErrno = 0;
+static int pstrosSaveStage = 0;
 static int pstrosSaveConfigured = 0;
+static int pstrosPreferredBackend = 0; /* 1=DLDI/fat, 2=DSi-SD/sd */
+static int pstrosFatInitAttempted = 0;
 
-/*
- * Resolve a writable FAT path before the JVM starts. nds_main.c calls these
- * functions directly, so they must live in the same translation unit as the
- * native nds.File implementation. A previous merge kept only the declarations
- * and accidentally dropped these definitions, causing undefined references at
- * the final link step.
- */
-int pstrosConfigureSaveStorage(void) {
-    static const char *const candidates[] = {
-        /* 8.3 first: old flashcart DLDI/libfat stacks can fail on long names. */
-        STANDALONE_SHORT_SAVE_PATH,
-        "fat:" STANDALONE_SHORT_SAVE_NAME,
-        STANDALONE_SAVE_PATH,
-        "fat:" STANDALONE_OUTPUT_BASENAME ".djs"
-    };
-    unsigned int i;
+static int pstrosAsciiLower(int c) {
+    if (c >= 'A' && c <= 'Z') return c + ('a' - 'A');
+    return c;
+}
 
-    pstrosSaveConfigured = 0;
-    pstrosSaveErrno = 0;
+static int pstrosPathStartsWithNoCase(const char *path, const char *prefix) {
+    if (path == NULL || prefix == NULL) return 0;
+    while (*prefix != 0) {
+        if (*path == 0 || pstrosAsciiLower((unsigned char)*path) !=
+                          pstrosAsciiLower((unsigned char)*prefix)) return 0;
+        path++;
+        prefix++;
+    }
+    return 1;
+}
 
-    for (i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
-        int fd;
-        errno = 0;
-        fd = open(candidates[i], O_WRONLY | O_CREAT | O_APPEND, 0666);
-        if (fd >= 0) {
-            if (close(fd) == 0) {
-                size_t pathLen;
-                snprintf(pstrosSavePath, sizeof(pstrosSavePath), "%s", candidates[i]);
-                snprintf(pstrosRmsSavePath, sizeof(pstrosRmsSavePath), "%s", candidates[i]);
-                pathLen = strlen(pstrosRmsSavePath);
-                if (pathLen >= 4 &&
-                    (strcmp(pstrosRmsSavePath + pathLen - 4, ".djs") == 0 ||
-                     strcmp(pstrosRmsSavePath + pathLen - 4, ".DJS") == 0)) {
-                    memcpy(pstrosRmsSavePath + pathLen - 4, ".RMS", 5);
-                } else {
-                    snprintf(pstrosRmsSavePath, sizeof(pstrosRmsSavePath), "%s",
-                             STANDALONE_RMS_SAVE_PATH);
-                }
-                pstrosSaveConfigured = 1;
-                return 1;
-            }
-            pstrosSaveErrno = errno;
+static void pstrosRememberLaunchSavePath(const char *launchPath) {
+    const char *lastSlash;
+    const char *lastDot;
+    size_t length;
+
+    if (launchPath == NULL || launchPath[0] == 0) return;
+    if (!pstrosPathStartsWithNoCase(launchPath, "fat:/") &&
+        !pstrosPathStartsWithNoCase(launchPath, "sd:/") &&
+        !pstrosPathStartsWithNoCase(launchPath, "sdmc:/")) return;
+
+    snprintf(pstrosLaunchSavePath, sizeof(pstrosLaunchSavePath), "%s", launchPath);
+    if (pstrosPathStartsWithNoCase(pstrosLaunchSavePath, "sdmc:/")) {
+        memmove(pstrosLaunchSavePath + 3, pstrosLaunchSavePath + 5,
+                strlen(pstrosLaunchSavePath + 5) + 1);
+        memcpy(pstrosLaunchSavePath, "sd:", 3);
+    }
+
+    lastSlash = strrchr(pstrosLaunchSavePath, '/');
+    lastDot = strrchr(pstrosLaunchSavePath, '.');
+    if (lastDot != NULL && (lastSlash == NULL || lastDot > lastSlash)) {
+        length = (size_t)(lastDot - pstrosLaunchSavePath);
+        if (length + 4 < sizeof(pstrosLaunchSavePath)) {
+            memcpy(pstrosLaunchSavePath + length, ".sav", 5);
         } else {
-            pstrosSaveErrno = errno;
+            pstrosLaunchSavePath[0] = 0;
+        }
+    } else {
+        length = strlen(pstrosLaunchSavePath);
+        if (length + 4 < sizeof(pstrosLaunchSavePath)) {
+            memcpy(pstrosLaunchSavePath + length, ".sav", 5);
+        } else {
+            pstrosLaunchSavePath[0] = 0;
+        }
+    }
+}
+
+static int pstrosLaunchPathMatchesVolume(const char *volume) {
+    char prefix[8];
+    if (volume == NULL || pstrosLaunchSavePath[0] == 0) return 0;
+    snprintf(prefix, sizeof(prefix), "%s:/", volume);
+    return pstrosPathStartsWithNoCase(pstrosLaunchSavePath, prefix);
+}
+
+static void pstrosChooseFinalSavePath(char *out, int outSize, const char *volume) {
+    if (pstrosLaunchPathMatchesVolume(volume)) {
+        snprintf(out, outSize, "%s", pstrosLaunchSavePath);
+    } else {
+        snprintf(out, outSize, "%s:/%s", volume, STANDALONE_SHORT_SAVE_NAME);
+    }
+}
+
+static void pstrosSetRmsPathFromSave(void) {
+    size_t pathLen;
+    snprintf(pstrosRmsSavePath, sizeof(pstrosRmsSavePath), "%s", pstrosSavePath);
+    pathLen = strlen(pstrosRmsSavePath);
+    if (pathLen >= 4 && pstrosRmsSavePath[pathLen - 4] == '.') {
+        memcpy(pstrosRmsSavePath + pathLen - 4, ".RMS", 5);
+    } else {
+        snprintf(pstrosRmsSavePath, sizeof(pstrosRmsSavePath), "%s",
+                 STANDALONE_RMS_SAVE_PATH);
+    }
+}
+
+static void pstrosMakeProbeName(char *out, int outSize,
+                                const char *volume, const char *finalPath) {
+    const char *slash;
+    size_t dirLength;
+    char shortName[32];
+    size_t length;
+
+    snprintf(shortName, sizeof(shortName), "%s", STANDALONE_SHORT_SAVE_NAME);
+    length = strlen(shortName);
+    if (length >= 4 && shortName[length - 4] == '.') {
+        memcpy(shortName + length - 4, ".TST", 5);
+    } else {
+        snprintf(shortName, sizeof(shortName), "DOJASAVE.TST");
+    }
+
+    slash = finalPath != NULL ? strrchr(finalPath, '/') : NULL;
+    if (slash != NULL) {
+        dirLength = (size_t)(slash - finalPath + 1);
+        if (dirLength + strlen(shortName) < (size_t)outSize) {
+            memcpy(out, finalPath, dirLength);
+            snprintf(out + dirLength, outSize - (int)dirLength, "%s", shortName);
+            return;
+        }
+    }
+    snprintf(out, outSize, "%s:/%s", volume, shortName);
+}
+
+/* Verify the complete stdio route, not merely volume registration. */
+static int pstrosConfigureSaveStorageOn(const char *volume, const char *backend) {
+    char probePath[NDS_FILE_PATH_MAX + 1];
+    char finalPath[NDS_FILE_PATH_MAX + 1];
+    static const unsigned char probeBytes[4] = { 'S', 'V', '3', '3' };
+    unsigned char verifyBytes[4];
+    FILE *fp;
+    int savedErrno = 0;
+
+    if (volume == NULL || backend == NULL) return 0;
+    pstrosChooseFinalSavePath(finalPath, sizeof(finalPath), volume);
+    pstrosMakeProbeName(probePath, sizeof(probePath), volume, finalPath);
+
+    errno = 0;
+    fp = fopen(probePath, "wb");
+    if (fp == NULL) {
+        pstrosSaveErrno = errno != 0 ? errno : EIO;
+        return 0;
+    }
+    if (fwrite(probeBytes, 1, sizeof(probeBytes), fp) != sizeof(probeBytes)) {
+        savedErrno = errno != 0 ? errno : EIO;
+        fclose(fp);
+        remove(probePath);
+        pstrosSaveErrno = savedErrno;
+        return 0;
+    }
+    if (fflush(fp) != 0) {
+        savedErrno = errno != 0 ? errno : EIO;
+        fclose(fp);
+        remove(probePath);
+        pstrosSaveErrno = savedErrno;
+        return 0;
+    }
+    if (fclose(fp) != 0) {
+        savedErrno = errno != 0 ? errno : EIO;
+        remove(probePath);
+        pstrosSaveErrno = savedErrno;
+        return 0;
+    }
+
+    errno = 0;
+    fp = fopen(probePath, "rb");
+    if (fp == NULL ||
+        fread(verifyBytes, 1, sizeof(verifyBytes), fp) != sizeof(verifyBytes) ||
+        memcmp(verifyBytes, probeBytes, sizeof(probeBytes)) != 0) {
+        savedErrno = errno != 0 ? errno : EIO;
+        if (fp != NULL) fclose(fp);
+        remove(probePath);
+        pstrosSaveErrno = savedErrno;
+        return 0;
+    }
+    if (fclose(fp) != 0) {
+        savedErrno = errno != 0 ? errno : EIO;
+        remove(probePath);
+        pstrosSaveErrno = savedErrno;
+        return 0;
+    }
+    remove(probePath);
+
+    snprintf(pstrosSavePath, sizeof(pstrosSavePath), "%s", finalPath);
+    snprintf(pstrosSaveBackend, sizeof(pstrosSaveBackend), "%s", backend);
+    pstrosSetRmsPathFromSave();
+    pstrosSaveConfigured = 1;
+    pstrosSaveErrno = 0;
+    pstrosSaveStage = 0;
+    return 1;
+}
+
+static int pstrosProbeMountedVolumes(int afterInit) {
+    const char *fatBackend = afterInit ? "DLDI/FAT" : "FAT-MOUNT";
+    const char *sdBackend = afterInit ? "DSI-SD" : "SD-MOUNT";
+    int canUseSd = isDSiMode();
+
+    /* A 3DS running this ROM in normal DS/NTR mode cannot access sd:/
+       directly. Probing sd:/ there only overwrote the useful DLDI error with
+       ENOTSUP (88). The homebrew header now makes TWiLight/flashcart loaders
+       DLDI-patch fat:/; sd:/ is tried only in actual DSi mode. */
+    if (pstrosPreferredBackend == 2 && canUseSd) {
+        pstrosSaveStage = afterInit ? 22 : 10;
+        if (pstrosConfigureSaveStorageOn("sd", sdBackend)) return 1;
+    }
+
+    pstrosSaveStage = afterInit ? 21 : 10;
+    if (pstrosConfigureSaveStorageOn("fat", fatBackend)) {
+        pstrosPreferredBackend = 1;
+        return 1;
+    }
+
+    if (canUseSd && pstrosPreferredBackend != 2) {
+        pstrosSaveStage = afterInit ? 22 : 10;
+        if (pstrosConfigureSaveStorageOn("sd", sdBackend)) {
+            pstrosPreferredBackend = 2;
+            return 1;
         }
     }
     return 0;
 }
 
-int pstrosMountSaveStorageDirect(void) {
-    const DISC_INTERFACE *interface;
+int pstrosMountSaveStorageAuto(const char *launchPath) {
+    int preferSd;
+    int preferFat;
+    int initErr = 0;
 
-    pstrosSaveConfigured = 0;
+    if (pstrosSaveConfigured) return 1;
+
+    pstrosRememberLaunchSavePath(launchPath);
+    preferSd = pstrosPathStartsWithNoCase(launchPath, "sd:/") ||
+               pstrosPathStartsWithNoCase(launchPath, "sdmc:/");
+    preferFat = pstrosPathStartsWithNoCase(launchPath, "fat:/");
+    if (preferSd) pstrosPreferredBackend = 2;
+    else if (preferFat) pstrosPreferredBackend = 1;
+
     pstrosSaveErrno = 0;
+    snprintf(pstrosSaveBackend, sizeof(pstrosSaveBackend), "NONE");
 
-    /* Some loaders already mounted fat:. Reuse it without touching hardware. */
-    if (pstrosConfigureSaveStorage()) {
-        return 1;
-    }
+    /* A launcher may already have registered one or both devoptab volumes. */
+    if (pstrosProbeMountedVolumes(0)) return 1;
 
-    errno = 0;
-    if (dldiGetInternal == NULL) {
-        pstrosSaveErrno = ENOSYS;
-        return 0;
-    }
-    interface = dldiGetInternal();
-    if (interface == NULL) {
-        pstrosSaveErrno = ENODEV;
-        return 0;
-    }
-
-    /* Mount exactly one interface. Do not call fatInitDefault()/fatInit(). */
-    if (!fatMountSimple("fat", interface)) {
-        pstrosSaveErrno = errno != 0 ? errno : ENODEV;
-        return 0;
+    /* Current libnds 2.x exposes block devices through libdvm.  Initialize the
+     * supported compatibility layer exactly once; do not call removed private
+     * DLDI/DSi-SD getters or construct DISC_INTERFACE objects ourselves. */
+    if (!pstrosFatInitAttempted) {
+        pstrosFatInitAttempted = 1;
+        pstrosSaveStage = 20; /* libdvm/libfat compatibility init */
+        errno = 0;
+        if (!fatInitDefault()) {
+            initErr = errno != 0 ? errno : ENODEV;
+        }
     }
 
-    if (!pstrosConfigureSaveStorage()) {
-        if (pstrosSaveErrno == 0) pstrosSaveErrno = EIO;
-        return 0;
+    /* fatInitDefault can return false when no new medium was mounted.  Probe
+     * the registered names regardless, because a launcher-owned mount may
+     * still be usable and because the write/read test is authoritative. */
+    if (pstrosProbeMountedVolumes(1)) return 1;
+
+    if (pstrosSaveErrno == 0) {
+        pstrosSaveErrno = initErr != 0 ? initErr : ENODEV;
     }
-    return 1;
+    if (pstrosSaveStage == 0) pstrosSaveStage = 40;
+    return 0;
+}
+
+/* Lazy retry after the JVM starts.  Initialization is one-shot, while volume
+ * probes are repeated so a launcher that finishes media setup late can still
+ * become writable on the first in-game save. */
+int pstrosMountSaveStorageDirect(void) {
+    return pstrosMountSaveStorageAuto(NULL);
 }
 
 const char *pstrosGetSavePath(void) {
     return pstrosSavePath;
 }
 
+const char *pstrosGetSaveBackendName(void) {
+    return pstrosSaveBackend;
+}
+
 int pstrosGetSaveErrno(void) {
     return pstrosSaveErrno;
+}
+
+int pstrosGetSaveStage(void) {
+    return pstrosSaveStage;
 }
 
 /*
@@ -525,9 +719,9 @@ int pstrosGetSaveErrno(void) {
  */
 
 /*
- * nds_main.c attempts one direct DLDI mount before the Java VM starts.
- * Native file calls must never initialize libfat again: a second device scan
- * can hang on loaders/emulators with an unavailable DSi SD backend.
+ * nds_main.c asks the supported libdvm/libfat compatibility layer to expose
+ * writable fat:/ or sd:/ storage before the Java VM. Native RMS calls reuse
+ * the verified path and never touch private device-interface symbols.
  */
 static int ensure_fat_ready(void) {
     return 1;

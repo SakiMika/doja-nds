@@ -93,7 +93,7 @@ public final class BitmapJapaneseFont {
             input.close();
             System.out.print("DoJa font ready: glyphs=");
             System.out.print(count);
-            System.out.println(" full-cp932 sjis-decoded nul-padding-skip");
+            System.out.println(" full-cp932 sjis-decoded nul-padding-skip latin-half-cell-preserve");
         } catch (Exception ignored) {
             characters = null;
             glyphs = null;
@@ -156,9 +156,9 @@ public final class BitmapJapaneseFont {
             int dy;
             for (dy = 0; dy < size; dy++) {
                 int sy = (dy * baseHeight) / size;
+                int sourceWidth = c <= 0x007F ? (baseWidth + 1) / 2 : baseWidth;
                 for (dx = 0; dx < width; dx++) {
-                    int fullDx = c <= 0x007F ? dx * 2 : dx;
-                    int sx = (fullDx * baseWidth) / size;
+                    int sx = (dx * sourceWidth) / width;
                     int bit = sy * baseWidth + sx;
                     int value = glyphs[srcBase + (bit >> 3)] & (0x80 >> (bit & 7));
                     if (value != 0) {

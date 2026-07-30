@@ -53,7 +53,7 @@ int xstrcmp(const char *s1, const char *s2) {
 
 
 /*
- * DoJa v25 late native binding.
+ * DoJa v36 late native binding.
  *
  * This NDS target uses ROMIZING=1 for the CLDC core.  The stock KVM only
  * searches nativeImplementations when ROMIZING=0, because native methods in
@@ -107,7 +107,7 @@ getDoJaLateNativeFunction(INSTANCE_CLASS clazz, const char *methodName,
     }
 
     if (result != NULL) {
-        printf("DoJa v25 late native bind: %s %s\n",
+        printf("DoJa v36 late native bind: %s %s\n",
                methodName, methodSignature == NULL ? "" : methodSignature);
     }
     return result;

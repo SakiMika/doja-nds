@@ -10,8 +10,8 @@ from pathlib import Path
 
 from segment_stream_patch import segment_stream_patch_counts
 
-PORT_VERSION = 25
-MARKER_NAME = 'prepared_v25.ok'
+PORT_VERSION = 36
+MARKER_NAME = 'prepared_v36.ok'
 
 
 def sha256_file(path: Path) -> str:
@@ -71,17 +71,25 @@ def main() -> int:
     parser.add_argument('--project', default='.')
     args = parser.parse_args()
     project = Path(args.project).resolve()
+    version_header_path = project / 'include' / 'doja_port_version.h'
+    if not version_header_path.is_file():
+        return fail('Missing source version header.')
+    version_header = version_header_path.read_text(encoding='ascii')
+    if ('#define DOJA_SOURCE_PORT_VERSION %d' % PORT_VERSION) not in version_header:
+        return fail('Source version header does not match verifier.')
+    if ('#define DOJA_SOURCE_PORT_TAG "v%d"' % PORT_VERSION) not in version_header:
+        return fail('Source version tag does not match verifier.')
     marker_path = project / 'build_doja' / MARKER_NAME
     if not marker_path.is_file():
-        return fail('Missing v25 preparation marker. Run build_doja.bat.')
+        return fail('Missing v36 preparation marker. Run build_doja.bat.')
     try:
         marker = json.loads(marker_path.read_text(encoding='utf-8'))
     except Exception as exc:
         return fail('Invalid preparation marker: ' + str(exc))
-    if marker.get('port_version') != PORT_VERSION or marker.get('port_tag') != 'v25':
-        return fail('Preparation marker is not for v25.')
+    if marker.get('port_version') != PORT_VERSION or marker.get('port_tag') != 'v36':
+        return fail('Preparation marker is not for v36.')
     output_stem = marker.get('output_stem', '')
-    if not output_stem.endswith('_doja_v25'):
+    if not output_stem.endswith('_doja_v36'):
         return fail('Output name is stale: ' + repr(output_stem))
     checks = {
         'game_jar_sha256': project / 'embedded' / 'game.jar',
@@ -101,6 +109,7 @@ def main() -> int:
         'resource_source_sha256': project / 'kvm' / 'VmExtra' / 'src' / 'resource.c',
         'nds_main_source_sha256': project / 'kvm' / 'VmSkel' / 'src' / 'nds_main.c',
         'nds_runtime_source_sha256': project / 'kvm' / 'VmSkel' / 'src' / 'nds_runtime.c',
+        'video_source_sha256': project / 'kvm' / 'VmSkel' / 'src' / 'Java_nds_Video.c',
         'machine_md_source_sha256': project / 'kvm' / 'VmSkel' / 'h' / 'machine_md.h',
         'collector_source_sha256': project / 'kvm' / 'VmCommon' / 'src' / 'collector.c',
         'doja_canvas_source_sha256': project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'Canvas.java',
@@ -124,19 +133,21 @@ def main() -> int:
         return fail('ScratchPad is not exactly 409600 bytes.')
     mk = (project / 'standalone_game.mk').read_text(encoding='utf-8')
     header = (project / 'include' / 'standalone_game.h').read_text(encoding='utf-8')
-    if 'TARGET := ' + output_stem not in mk or 'TEXT2 := DoJa NDS Port v25' not in mk:
-        return fail('standalone_game.mk is not v25.')
-    if '#define DOJA_PORT_BUILD_VERSION 25' not in header:
-        return fail('standalone_game.h is not v25.')
-    if ('.djs"' not in header or 'STANDALONE_RMS_SAVE_PATH' not in header
+    if 'TARGET := ' + output_stem not in mk or 'TEXT2 := DoJa NDS Port v36' not in mk:
+        return fail('standalone_game.mk is not v36.')
+    if '#define DOJA_PORT_BUILD_VERSION 36' not in header:
+        return fail('standalone_game.h is not v36.')
+    if ('#define DOJA_SCREEN_Y 0' not in header or '.sav"' not in header or 'STANDALONE_RMS_SAVE_PATH' not in header
             or 'STANDALONE_LEGACY_SAVE_PATH' not in header
-            or 'STANDALONE_SHORT_SAVE_PATH' not in header):
-        return fail('v25 dedicated save-path metadata is missing.')
+            or 'STANDALONE_SHORT_SAVE_PATH' not in header
+            or 'STANDALONE_SAVE_MODE_TEXT "SAV FILE"' not in header):
+        return fail('v36 .sav save-path metadata is missing.')
     with zipfile.ZipFile(project / 'embedded' / 'game.jar', 'r') as archive:
         manifest = archive.read('META-INF/MANIFEST.MF')
         names = set(archive.namelist())
-        if b'DoJa-Port-Version: 25' not in manifest:
-            return fail('game.jar manifest is not v25.')
+        expected_manifest_version = ('DoJa-Port-Version: %d\r\n' % PORT_VERSION).encode('ascii')
+        if expected_manifest_version not in manifest:
+            return fail('game.jar manifest version mismatch; expected %d.' % PORT_VERSION)
         if 'doja/scratchpad.bin' in names:
             return fail('game.jar still contains legacy ScratchPad resource.')
         try:
@@ -158,7 +169,7 @@ def main() -> int:
             sjis_reader = archive.read('com/sun/cldc/i18n/j2me/SJIS_Reader.class')
             sjis_writer = archive.read('com/sun/cldc/i18n/j2me/SJIS_Writer.class')
         except KeyError as exc:
-            return fail('Missing v25 runtime class/resource: ' + str(exc))
+            return fail('Missing v36 runtime class/resource: ' + str(exc))
         if len(jpfont) < 12 or jpfont[:4] != b'DJF1':
             return fail('Japanese font resource is missing or invalid.')
         font_width, font_height, glyph_count, bytes_per_glyph = struct.unpack('>HHHH', jpfont[4:12])
@@ -185,7 +196,7 @@ def main() -> int:
             if name.startswith('com/sun/cldc/io/j2me/scratchpad/')
             and name.endswith('.class')]
         if any('$' in name for name in scratchpad_classes):
-            return fail('Nested ScratchPad classes are forbidden in v25.')
+            return fail('Nested ScratchPad classes are forbidden in v36.')
         if b'doja/scratchpad.bin' in protocol or b'ResourceInputStream' in protocol:
             return fail('ScratchPad Protocol.class is stale.')
         if b'nativeFlush' not in output_stream:
@@ -198,7 +209,7 @@ def main() -> int:
                     b'nativeWrite', b'nativeWriteBytes', b'nativeFlush', b'openRange',
                     b'ScratchpadInputStream', b'sizeUnchecked')
         if not all(token in protocol for token in required):
-            return fail('v25 separate-stream ScratchPad methods are missing.')
+            return fail('v36 separate-stream ScratchPad methods are missing.')
         if b'com/sun/cldc/io/j2me/scratchpad/Protocol' not in http:
             return fail('HTTP fallback does not use the native ScratchPad Protocol.')
         try:
@@ -229,6 +240,20 @@ def main() -> int:
     machine_md_source = (project / 'kvm' / 'VmSkel' / 'h' / 'machine_md.h').read_text(encoding='latin-1')
     collector_source = (project / 'kvm' / 'VmCommon' / 'src' / 'collector.c').read_text(encoding='latin-1')
     nds_file_source = (project / 'kvm' / 'VmSkel' / 'src' / 'Java_nds_File.c').read_text(encoding='latin-1')
+    standalone_header_source = (project / 'include' / 'standalone_game.h').read_text(encoding='utf-8')
+    standalone_mk_source = (project / 'standalone_game.mk').read_text(encoding='utf-8')
+    makefile_source = (project / 'Makefile').read_text(encoding='utf-8')
+    if ('#define STANDALONE_NDS_GAME_CODE "####"' not in standalone_header_source or
+            '#define STANDALONE_APP_STORAGE_CODE "' not in standalone_header_source or
+            'NDS_GAME_CODE := \\#\\#\\#\\#' not in standalone_mk_source or
+            '-g "$(NDS_GAME_CODE)"' not in makefile_source):
+        return fail('Generated ROM header is not marked as homebrew for DLDI patching.')
+    if ('int canUseSd = isDSiMode();' not in nds_file_source or
+            'MEDIA: NO DLDI' not in nds_main_source or
+            'MODE: SAV FILE' not in nds_main_source or
+            'TARGET: SAME-NAME .SAV' not in nds_main_source):
+        return fail('v36 SAV/DLDI diagnostics are missing or stale.')
+
     if 'extends InputStream' in protocol_source:
         return fail('Protocol source still doubles as InputStream.')
     if 'return new ScratchpadInputStream' not in protocol_source:
@@ -241,31 +266,55 @@ def main() -> int:
         return fail('SegmentToken source is missing the one-byte loader token.')
     if 'extends ByteArrayInputStream' not in segment_source or 'nativeReadBytes' not in segment_source:
         return fail('ScratchpadByteArrayInputStream source is missing the direct ROM stream.')
-    if ('DOJA_PORT_BUILD_VERSION != 25' not in nds_main_source
+    if ('DOJA_PORT_BUILD_VERSION != DOJA_SOURCE_PORT_VERSION' not in nds_main_source
             or 'SAVE: READY' not in nds_main_source
-            or 'pstrosSetVmConsoleEnabled(0)' not in nds_main_source):
-        return fail('NDS entry point is not the v25 compact save-status build.')
-    if ('pstrosMountSaveStorageDirect()' not in nds_main_source or
+            or 'MEDIA: %s' not in nds_main_source
+            or 'STAGE: %s' not in nds_main_source
+            or 'pstrosSetVmConsoleEnabled(0)' not in nds_main_source
+            or '#include "doja_port_version.h"' not in nds_main_source):
+        return fail('NDS entry point is not the v36 compact save-status build.')
+    if ('pstrosMountSaveStorageAuto(launchPath)' not in nds_main_source or
+            'argc > 0 && argv != NULL' not in nds_main_source or
             'dojaSpPersistenceInit' not in nds_main_source or
-            'if (fatInitDefault())' in nds_main_source):
-        return fail('NDS entry point is not using the boot-safe direct DLDI save mount.')
+            'fatInitDefault()' in nds_main_source):
+        return fail('NDS entry point is not using the argv-aware save mount.')
     if '#define DEFAULTHEAPSIZE (2432*1024)' not in machine_md_source:
-        return fail('Java heap is not fixed at 2432 KiB for v25.')
-    if 'DoJa v25 heap allocated:' not in nds_runtime_source:
-        return fail('v25 heap allocation diagnostics are missing.')
+        return fail('Java heap is not fixed at 2432 KiB for v36.')
+    if 'DoJa v36 heap allocated:' not in nds_runtime_source:
+        return fail('v36 heap allocation diagnostics are missing.')
     if 'KVM HEAP OOM req=' not in collector_source:
         return fail('Heap fragmentation diagnostics are missing.')
-    direct_mount_tokens = (
+    save_mount_tokens = (
+        'int pstrosMountSaveStorageAuto(const char *launchPath)',
         'int pstrosMountSaveStorageDirect(void)',
-        'dldiGetInternal == NULL',
-        'fatMountSimple("fat", interface)',
-        'STANDALONE_SHORT_SAVE_PATH',
-        'Do not call fatInitDefault()/fatInit()',
+        'fatInitDefault()',
+        'pstrosFatInitAttempted',
+        'pstrosProbeMountedVolumes(0)',
+        'pstrosProbeMountedVolumes(1)',
+        'pstrosConfigureSaveStorageOn',
+        'fopen(probePath, "wb")',
+        'fopen(probePath, "rb")',
+        'STANDALONE_SHORT_SAVE_NAME',
+        'pstrosRememberLaunchSavePath',
+        'pstrosChooseFinalSavePath',
+        'pstrosLaunchSavePath',
+        'pstrosPreferredBackend',
+        'DLDI/FAT',
+        'DSI-SD',
     )
-    if not all(token in nds_file_source for token in direct_mount_tokens):
-        return fail('Direct DLDI save mount backend is missing or stale.')
-    if '"sd:/" STANDALONE_OUTPUT_BASENAME' in nds_file_source or '"sdmc:/"' in nds_file_source:
-        return fail('Unsafe multi-device save probing is still enabled.')
+    if not all(token in nds_file_source for token in save_mount_tokens):
+        return fail('libdvm-compatible argv-aware save backend is missing or stale.')
+    forbidden_storage_tokens = (
+        '_FAT_disc_interfaces',
+        'dldiGetInternal',
+        'get_io_dsisd',
+        'fatMountSimple(',
+        'pstrosResolveFatInterface',
+    )
+    if any(token in nds_file_source for token in forbidden_storage_tokens):
+        return fail('Removed/private storage interface reference is still present.')
+    if 'open(probePath, O_' in nds_file_source or 'fatInitDefault()' in nds_main_source:
+        return fail('Storage initialization is in the wrong layer or raw-open probing is enabled.')
 
     doja_canvas_source = (project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'Canvas.java').read_text(encoding='utf-8')
     doja_mainapp_source = (project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'MainApp.java').read_text(encoding='utf-8')
@@ -280,7 +329,32 @@ def main() -> int:
         'case -7: return KEY_SOFT2',
     )
     if input_tokens[0] not in doja_mainapp_source or not all(token in doja_canvas_source for token in input_tokens[1:]):
-        return fail('DoJa v25 input mapping fix is missing or stale.')
+        return fail('DoJa v36 input mapping fix is missing or stale.')
+    display_tokens = (
+        'Display.WIDTH = 240',
+        'Display.HEIGHT = 240',
+        'EmuCanvas.screenPosX = 0',
+        'EmuCanvas.screenPosY = 0',
+        'force 240x240 -> NDS 256x192',
+    )
+    if not all(token in doja_mainapp_source for token in display_tokens):
+        return fail('DoJa v36 forced NDS screen resize setup is missing or stale.')
+    video_source = (project / 'kvm' / 'VmSkel' / 'src' / 'Java_nds_Video.c').read_text(encoding='latin-1')
+    video_resize_tokens = (
+        'DoJa v36 forced final-frame resize',
+        'srcW == 240 && srcH == 240 && dstW == 256 && dstH == 192',
+        'int sourceY = ((outY * 5) + 2) >> 2',
+        'int sourceX = ((outX * 15) + 7) >> 4',
+    )
+    if not all(token in video_source for token in video_resize_tokens):
+        return fail('DoJa v36 native 240x240 to 256x192 scaler is missing or stale.')
+    if 'goto blit_done;' not in video_source or '\nblit_done:\n' not in video_source:
+        return fail('DoJa v36 scaler does not use the common KNI handle epilogue.')
+    scaler_start = video_source.index('DoJa v36 forced final-frame resize')
+    normal_blit_start = video_source.index('//check the alpha channel exists', scaler_start)
+    scaler_branch = video_source[scaler_start:normal_blit_start]
+    if '\n\t\tKNI_EndHandles();' in scaler_branch or '\n\t\tKNI_ReturnVoid();' in scaler_branch:
+        return fail('DoJa v36 scaler closes the KNI handle scope inside its branch.')
     key_source = (project / 'kvm' / 'VmSkel' / 'src' / 'Java_nds_Key.c').read_text(encoding='utf-8')
     if 'POLL n=' in key_source or 'RAW n=' in key_source:
         return fail('Temporary input diagnostics are still enabled.')
@@ -311,16 +385,33 @@ def main() -> int:
         return fail('Japanese font fallback diagnostics are missing or stale.')
     if 'Cp932Codec.normalizeForDisplay' not in bitmap_font_source:
         return fail('Bitmap font is not using the SJIS display fallback.')
+    latin_font_tokens = (
+        'target_w = (width + 1) // 2 if ord(char) <= 0x007F else width',
+        'threshold = 80 if ord(char) <= 0x007F else 96',
+    )
+    if not all(token in fontgen_source for token in latin_font_tokens):
+        return fail('Latin half-width glyph generation fix is missing or stale.')
+    runtime_latin_tokens = (
+        'int sourceWidth = c <= 0x007F ? (baseWidth + 1) / 2 : baseWidth',
+        'int sx = (dx * sourceWidth) / width',
+        'latin-half-cell-preserve',
+    )
+    if not all(token in bitmap_font_source for token in runtime_latin_tokens):
+        return fail('Latin glyph renderer still skips source columns.')
+    if b'latin-half-cell-preserve' not in bitmap_font_class:
+        return fail('Compiled BitmapJapaneseFont.class lacks the Latin stroke fix.')
+    if 'NFTR' in fontgen_source or 'nftr' in fontgen_source:
+        return fail('NFTR hybrid font support must not be enabled in v36.')
     nul_padding_tokens = (
         'isNonPrintingControl',
         'return c < 0x0020 || c == 0x007F',
         'nul-padding-skip',
     )
     if not all(token in bitmap_font_source for token in nul_padding_tokens):
-        return fail('v25 NUL/control padding font fix is missing or stale.')
+        return fail('v36 NUL/control padding font fix is missing or stale.')
     if (b'isNonPrintingControl' not in bitmap_font_class
             or b'nul-padding-skip' not in bitmap_font_class):
-        return fail('Compiled BitmapJapaneseFont.class lacks the v25 padding fix.')
+        return fail('Compiled BitmapJapaneseFont.class lacks the v36 padding fix.')
 
     property_source = (project / 'kvm' / 'VmCommon' / 'src' / 'property.c').read_text(encoding='latin-1')
     cp932_codec_source = (project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'encoding' / 'Cp932Codec.java').read_text(encoding='utf-8')
@@ -335,7 +426,7 @@ def main() -> int:
 
     resource_source = (project / 'kvm' / 'VmExtra' / 'src' / 'resource.c').read_text(encoding='latin-1')
     save_tokens = (
-        'DoJa v25 ScratchPad ROM access with persistent sparse saves',
+        'DoJa v36 ScratchPad ROM access with persistent same-name .sav saves',
         'dojaSpPersistenceInit',
         'dojaSpPersistenceFlush',
         'dojaSpEnsurePersistence',
@@ -351,10 +442,13 @@ def main() -> int:
         'dojaSpValidateFile',
         'dojaSpCopyFile',
         'memcpy(dojaSpTempPath + length - 4, ".TMP", 5)',
+        "dojaSpTempPath[length - 4] == '.'",
         'dojaSpWriteOverlayFile',
     )
     if not all(token in resource_source for token in save_tokens):
-        return fail('v25 direct-DLDI persistent ScratchPad backend is missing or stale.')
+        return fail('v36 persistent ScratchPad backend is missing or stale.')
+    if 'fsync(fileno' in resource_source:
+        return fail('Unsupported fsync calls are still present in the save writer.')
     icon = project / 'assets' / 'default_standalone_icon.bmp'
     icon_data = icon.read_bytes()
     if len(icon_data) < 70 or icon_data[:2] != b'BM':
@@ -368,7 +462,7 @@ def main() -> int:
     loader = (project / 'kvm' / 'VmExtra' / 'src' / 'loaderFile.c').read_bytes()
     if b'doja/scratchpad.bin' in loader:
         return fail('Native source still contains the legacy ScratchPad resource bridge.')
-    print('[OK] DoJa v25 preparation verified')
+    print('[OK] DoJa v36 preparation verified')
     print('[OK] Output ROM:', output_stem + '.nds')
     return 0
 

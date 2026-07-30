@@ -1,44 +1,42 @@
-# DoJa NDS Port v25
+# DoJa NDS Port v36 — font CP932 cũ, sửa chữ Latin và ép toàn màn hình
 
-Nhánh DoJa độc lập với PSTros. Bản này giữ font Nhật CP932/SJIS tích hợp sẵn, ScratchPad đọc trực tiếp từ ROM và icon mặc định trong `assets/default_standalone_icon.bmp`.
+Bản v36 giữ font bitmap CP932 12×12 trước v34. `dsr_fnt.NFTR` không còn được đọc hoặc trộn vào ROM.
 
-## Save v25
+## Font
 
-Corpse Party lưu ba slot trực tiếp trong ScratchPad. Bản v25 nhận diện đúng vùng ghi:
+- Giữ trọn bộ ký tự CP932/SJIS: khoảng 7.485 glyph.
+- Ký tự Nhật vẫn dùng font Windows được chọn khi chuẩn bị ROM.
+- Chữ Latin/ASCII được raster trực tiếp vào ô nửa chiều rộng 6×12.
+- Runtime không còn lấy cách một cột ảnh, tránh mất nét dọc ở các chữ như `M`, `N`, `H`, `E`, `F`, `R`.
+- Giữ sửa lỗi bỏ qua byte NUL ở cuối chuỗi.
 
-- Slot 1: offset 5, dài 1563 byte.
-- Slot 2: offset 1568, dài 1563 byte.
-- Slot 3: offset 3131, dài 1563 byte.
+## Hiển thị
 
-Save được lưu ở thư mục gốc của thiết bị FAT bằng tên 8.3 lấy từ mã ROM. Ví dụ mã ROM `CPN1` tạo:
-
-```text
-fat:/CPN1.DJS
-```
-
-File tạm cũng dùng tên 8.3 `CPN1.TMP`, tránh lỗi của flashcart/DLDI cũ với tên `CPN1.DJS.tmp`. Bản v25 thử lại mount DLDI ngay lúc game ghi save, ghi file tạm rồi đọc kiểm tra CRC; nếu rename/copy không hoạt động, nó chuyển sang ghi trực tiếp và kiểm tra lại file cuối.
-
-## Trạng thái màn hình dưới
+Game vẫn chạy với hệ tọa độ gốc 240×240 để không làm lệch map, va chạm và giao diện. Khung hình hoàn chỉnh được scale nearest-neighbor sang toàn bộ màn hình NDS 256×192:
 
 ```text
-SAVE: READY
-LAST: SAVED SLOT 3
-FILE: CPN1.DJS
+240×240 logic -> 256×192 output
+X: 15/16 source pixel cho mỗi pixel màn hình
+Y: 5/4 source pixel cho mỗi pixel màn hình
 ```
 
-`SAVED SLOT n` chỉ xuất hiện sau khi file cuối đã được đọc lại và xác minh. Các trạng thái khác:
+Không còn cắt 24 pixel phía trên và 24 pixel phía dưới. Hình sẽ bị kéo ngang nhẹ vì đây là chế độ force full-screen theo đúng 256×192.
 
-- `SAVE: RAM ONLY`: FAT/DLDI chưa dùng được; thay đổi chưa tồn tại sau khi tắt máy.
-- `LAST: SAVE LOADED`: đã nạp file `.DJS` lúc khởi động.
-- `LAST: SAVING SLOT n`: đang ghi.
-- `LAST: SAVE FAILED (-n)`: lỗi ở một bước ghi hoặc xác minh; mã lỗi được giữ trên màn hình.
+## Save
+
+Giữ nguyên phương thức `.sav` của v33 đang hoạt động:
+
+```text
+corpse_party_newchapter_1_doja_v36.nds
+corpse_party_newchapter_1_doja_v36.sav
+```
+
+Khi launcher không truyền đường dẫn ROM, dùng `fat:/CPN1.SAV`. Ba slot, write-through, CRC và trạng thái save màn hình dưới được giữ nguyên.
+
+## Sửa lỗi build v35
+
+V35 gọi macro `KNI_EndHandles()` ngay trong nhánh scale. Macro này đóng scope ở thời điểm biên dịch, nên phần blit phía sau mất toàn bộ biến cục bộ. V36 chỉ đóng handles tại nhãn `blit_done` ở cuối hàm.
 
 ## Build
 
-Giải nén source vào thư mục mới rồi chạy:
-
-```bat
-build_doja.bat
-```
-
-Build tự tạo `last_prepare.log`, `last_build.log` và ROM có hậu tố `_doja_v25.nds`.
+Giải nén vào thư mục mới, chạy `build_doja.bat`, chọn JAR/JAM/SP và font Nhật TTF/TTC. Không cần đặt file NFTR cạnh source.

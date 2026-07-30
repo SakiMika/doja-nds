@@ -3,7 +3,7 @@
 #include <kni.h>
 #include <stdio.h>
 
-/* v25 production input path: scan keys without RAW/POLL console spam. */
+/* v36 production input path: scan keys without RAW/POLL console spam. */
 KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Key_scan() {
     scanKeys();
     KNI_ReturnVoid();

@@ -64,10 +64,10 @@ cell *allocateHeap(long *sizeptr, void **realresultptr) {
     void *space = malloc(requested + sizeof(cell) - 1);
     *realresultptr = space;
     if (space == NULL) {
-        printf("DoJa v25 heap malloc failed: requested=%ld\n", requested);
+        printf("DoJa v36 heap malloc failed: requested=%ld\n", requested);
         return NULL;
     }
-    printf("DoJa v25 heap allocated: %ld bytes\n", requested);
+    printf("DoJa v36 heap allocated: %ld bytes\n", requested);
     return (cell *)((((long)space) + (sizeof(cell) - 1)) & ~(sizeof(cell) - 1));
 }
 

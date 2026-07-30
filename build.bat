@@ -39,7 +39,7 @@ if not exist "%OUTPUT_STEM%.nds" (
     pause
     exit /b 1
 )
-echo [OK] ROM v25: %OUTPUT_STEM%.nds
+echo [OK] ROM v36: %OUTPUT_STEM%.nds
 echo [LOG] last_prepare.log va last_build.log
 pause
 exit /b 0
@@ -51,7 +51,7 @@ pause
 exit /b %ERR%
 
 :not_prepared
-echo [ERROR] Chua co bo du lieu v25 hop le.
+echo [ERROR] Chua co bo du lieu v36 hop le.
 echo [ERROR] Chi chay build_doja.bat de tao lai game, ScratchPad va metadata.
 pause
 exit /b 1

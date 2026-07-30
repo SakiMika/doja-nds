@@ -72,7 +72,7 @@ typedef signed int   s32;
 #define BGCTRL_NAME(m)   ((m) << 8)
 #define BGCTRL_M7WRAP    0x2000
 #define BGCTRL_H32       0x0000
-#define BGCTRL_V32       0x0000
+#define BGCTRL_V36       0x0000
 
 
 struct BGPOINT { u16 x, y; };

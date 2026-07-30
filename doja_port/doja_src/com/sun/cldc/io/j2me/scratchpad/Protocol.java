@@ -13,7 +13,7 @@ import javax.microedition.io.StreamConnection;
 /**
  * DoJa ScratchPad connection backed directly by the ROM-linked .sp payload.
  *
- * v25 keeps the connection and returned streams as separate top-level
+ * v36 keeps the connection and returned streams as separate top-level
  * objects. Connector.openDataInputStream() closes the Connection immediately
  * after obtaining the stream.  In v14 Protocol was also the InputStream, so
  * that close made the returned stream unusable and the game retried forever.

@@ -162,16 +162,15 @@ void Java_com_sun_cldc_io_ResourceInputStream_size(void) {
 }
 
 /*=========================================================================
- * DoJa v25 ScratchPad ROM access with persistent sparse saves.
+ * DoJa v36 ScratchPad ROM access with persistent same-name .sav saves.
  *
  * The original 409600-byte ScratchPad remains linked read-only in ROM. Only
  * 256-byte chunks changed by the game are copied into a small native overlay.
- * That overlay is stored in a CRC-protected .djs file on FAT and restored
+ * That overlay is stored in a CRC-protected .sav file beside the ROM (or CPN1.SAV fallback) and restored
  * before the JVM starts. This avoids allocating or rewriting the full SP.
  *=======================================================================*/
 #include <stdio.h>
 #include <errno.h>
-#include <unistd.h>
 
 #include "standalone_game.h"
 
@@ -228,15 +227,11 @@ static int dojaSpConfigurePersistencePath(const char *path) {
     }
     snprintf(dojaSpSavePath, sizeof(dojaSpSavePath), "%s", path);
 
-    /* Keep the temporary file 8.3-compatible too. Appending ".tmp" to
-       CPN1.DJS produced CPN1.DJS.tmp, which some old DLDI/libfat stacks
-       cannot create even though the final short filename is valid. */
+    /* Keep the temporary file extension short. Both the same-name .sav path
+       and the root CPN1.SAV fallback become a sibling .TMP file. */
     snprintf(dojaSpTempPath, sizeof(dojaSpTempPath), "%s", path);
     length = strlen(dojaSpTempPath);
-    if (length >= 4 && dojaSpTempPath[length - 4] == '.' &&
-        ((dojaSpTempPath[length - 3] == 'D' || dojaSpTempPath[length - 3] == 'd') &&
-         (dojaSpTempPath[length - 2] == 'J' || dojaSpTempPath[length - 2] == 'j') &&
-         (dojaSpTempPath[length - 1] == 'S' || dojaSpTempPath[length - 1] == 's'))) {
+    if (length >= 4 && dojaSpTempPath[length - 4] == '.') {
         memcpy(dojaSpTempPath + length - 4, ".TMP", 5);
     } else {
         snprintf(dojaSpTempPath, sizeof(dojaSpTempPath), "%s.tmp", path);
@@ -455,7 +450,6 @@ static int dojaSpCopyFile(const char *source, const char *destination) {
     }
     if (ferror(in)) ok = 0;
     if (fflush(out) != 0) ok = 0;
-    fsync(fileno(out));
     if (fclose(out) != 0) ok = 0;
     fclose(in);
     return ok;
@@ -575,7 +569,6 @@ static int dojaSpWriteOverlayFile(const char *path) {
         fclose(fp);
         return -5;
     }
-    fsync(fileno(fp));
     if (fclose(fp) != 0) return -6;
     return 1;
 }
@@ -590,9 +583,9 @@ int dojaSpPersistenceFlush(void) {
     if (!dojaSpDirty) return 0;
     dojaSaveUiSaving(dojaSpLastSlot);
 
-    /* First use an 8.3-compatible temporary file (for example CPN1.TMP).
-       If the flashcart cannot create/verify it, fall back to a direct verified
-       write of CPN1.DJS instead of silently losing the save. */
+    /* First use a sibling temporary file (for example CPN1.TMP).
+       If the launcher cannot create/verify it, fall back to a direct verified
+       write of the final .sav file instead of silently losing the save. */
     writeResult = dojaSpWriteOverlayFile(dojaSpTempPath);
     if (writeResult < 0 || !dojaSpValidateFile(dojaSpTempPath)) {
         remove(dojaSpTempPath);

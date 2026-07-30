@@ -14,7 +14,7 @@ public final class MainApp {
     public static void main(String[] args) {
         String className = "Main";
         String appParam = "0";
-        int screenY = -24;
+        int screenY = 0;
         int i;
 
         for (i = 0; args != null && i < args.length; i++) {
@@ -30,8 +30,9 @@ public final class MainApp {
 
         javax.microedition.lcdui.Display.WIDTH = 240;
         javax.microedition.lcdui.Display.HEIGHT = 240;
-        EmuCanvas.screenPosX = 8;
-        EmuCanvas.screenPosY = screenY;
+        EmuCanvas.screenPosX = 0;
+        EmuCanvas.screenPosY = 0;
+        System.out.println("DoJa display: force 240x240 -> NDS 256x192");
 
         EmuCanvas.keyA = javax.microedition.lcdui.Display.keyFire;
         EmuCanvas.keyB = javax.microedition.lcdui.Display.keySoftRight;
@@ -57,7 +58,7 @@ public final class MainApp {
             Class appClass = Class.forName(className);
             IApplication app = (IApplication) appClass.newInstance();
             IApplication._bind(app, new String[] { appParam }, "http://localhost/");
-            System.out.println("DoJa NDS v25: DIRECT DLDI SAVE");
+            System.out.println("DoJa NDS v36: FULLSCREEN + LATIN FIX");
             System.out.println("microedition.encoding=SJIS");
             System.out.println("DoJa NDS: start");
             app.start();

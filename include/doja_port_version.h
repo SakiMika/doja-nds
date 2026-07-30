@@ -1,0 +1,7 @@
+#ifndef DOJA_PORT_VERSION_H
+#define DOJA_PORT_VERSION_H
+
+#define DOJA_SOURCE_PORT_VERSION 36
+#define DOJA_SOURCE_PORT_TAG "v36"
+
+#endif
