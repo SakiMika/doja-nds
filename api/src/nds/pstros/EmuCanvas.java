@@ -261,7 +261,6 @@ public class EmuCanvas extends NDSCanvas {
 		return fps;
 	}
 	public void paint() {
-		System.out.println("EmuCanvas: paint()...");
 		NDSGraphics g = getGraphics();
 		paintContent(g);
 		//g.dispose();
@@ -272,7 +271,6 @@ public class EmuCanvas extends NDSCanvas {
 	}
 
 	public void paint(NDSGraphics g) {
-		System.out.println("EmuCanvas: paint(g)...");
 		paintContent(g);
 	}
 	private void paintContent(NDSGraphics g) {
@@ -363,43 +361,36 @@ public class EmuCanvas extends NDSCanvas {
 		int held = Key.held();
 		int down = Key.down();
 		int up = Key.up();
-		if (down != 0 || up != 0) {
-			System.out.println("JAVA RAW h=" + held + " d=" + down + " u=" + up);
-		}
 		checkKeyPress(down);
 		checkKeyRelease(up);
 	}
-	private void debugMap(String action, String ndsName, int j2meCode) {
-		System.out.println("MAP " + action + " " + ndsName + " -> " + j2meCode);
-	}
-
 	private void checkKeyPress(int keys) {
-		if ((keys & Key.LEFT) != 0) { debugMap("DN", "LEFT", keyLeft); keyPressed(keyLeft); }
-		if ((keys & Key.RIGHT) != 0) { debugMap("DN", "RIGHT", keyRight); keyPressed(keyRight); }
-		if ((keys & Key.UP) != 0) { debugMap("DN", "UP", keyUp); keyPressed(keyUp); }
-		if ((keys & Key.DOWN) != 0) { debugMap("DN", "DOWN", keyDown); keyPressed(keyDown); }
-		if ((keys & Key.B) != 0) { debugMap("DN", "B", keyB); keyPressed(keyB); }
-		if ((keys & Key.L) != 0) { debugMap("DN", "L", keyL); keyPressed(keyL); }
-		if ((keys & Key.R) != 0) { debugMap("DN", "R", keyR); keyPressed(keyR); }
-		if ((keys & Key.SELECT) != 0) { debugMap("DN", "SELECT", keySelect); keyPressed(keySelect); }
-		if ((keys & Key.START) != 0) { debugMap("DN", "START", keyStart); keyPressed(keyStart); }
-		if ((keys & Key.X) != 0) { debugMap("DN", "X", keyX); keyPressed(keyX); }
-		if ((keys & Key.A) != 0) { debugMap("DN", "A", keyA); keyPressed(keyA); }
-		if ((keys & Key.Y) != 0) { debugMap("DN", "Y", keyY); keyPressed(keyY); }
+		if ((keys & Key.LEFT) != 0) { keyPressed(keyLeft); }
+		if ((keys & Key.RIGHT) != 0) { keyPressed(keyRight); }
+		if ((keys & Key.UP) != 0) { keyPressed(keyUp); }
+		if ((keys & Key.DOWN) != 0) { keyPressed(keyDown); }
+		if ((keys & Key.B) != 0) { keyPressed(keyB); }
+		if ((keys & Key.L) != 0) { keyPressed(keyL); }
+		if ((keys & Key.R) != 0) { keyPressed(keyR); }
+		if ((keys & Key.SELECT) != 0) { keyPressed(keySelect); }
+		if ((keys & Key.START) != 0) { keyPressed(keyStart); }
+		if ((keys & Key.X) != 0) { keyPressed(keyX); }
+		if ((keys & Key.A) != 0) { keyPressed(keyA); }
+		if ((keys & Key.Y) != 0) { keyPressed(keyY); }
 	}
 	private void checkKeyRelease(int keys) {
-		if ((keys & Key.LEFT) != 0) { debugMap("UP", "LEFT", keyLeft); keyReleased(keyLeft); }
-		if ((keys & Key.RIGHT) != 0) { debugMap("UP", "RIGHT", keyRight); keyReleased(keyRight); }
-		if ((keys & Key.UP) != 0) { debugMap("UP", "UP", keyUp); keyReleased(keyUp); }
-		if ((keys & Key.DOWN) != 0) { debugMap("UP", "DOWN", keyDown); keyReleased(keyDown); }
-		if ((keys & Key.B) != 0) { debugMap("UP", "B", keyB); keyReleased(keyB); }
-		if ((keys & Key.L) != 0) { debugMap("UP", "L", keyL); keyReleased(keyL); }
-		if ((keys & Key.R) != 0) { debugMap("UP", "R", keyR); keyReleased(keyR); }
-		if ((keys & Key.SELECT) != 0) { debugMap("UP", "SELECT", keySelect); keyReleased(keySelect); }
-		if ((keys & Key.START) != 0) { debugMap("UP", "START", keyStart); keyReleased(keyStart); }
-		if ((keys & Key.X) != 0) { debugMap("UP", "X", keyX); keyReleased(keyX); }
-		if ((keys & Key.A) != 0) { debugMap("UP", "A", keyA); keyReleased(keyA); }
-		if ((keys & Key.Y) != 0) { debugMap("UP", "Y", keyY); keyReleased(keyY); }
+		if ((keys & Key.LEFT) != 0) { keyReleased(keyLeft); }
+		if ((keys & Key.RIGHT) != 0) { keyReleased(keyRight); }
+		if ((keys & Key.UP) != 0) { keyReleased(keyUp); }
+		if ((keys & Key.DOWN) != 0) { keyReleased(keyDown); }
+		if ((keys & Key.B) != 0) { keyReleased(keyB); }
+		if ((keys & Key.L) != 0) { keyReleased(keyL); }
+		if ((keys & Key.R) != 0) { keyReleased(keyR); }
+		if ((keys & Key.SELECT) != 0) { keyReleased(keySelect); }
+		if ((keys & Key.START) != 0) { keyReleased(keyStart); }
+		if ((keys & Key.X) != 0) { keyReleased(keyX); }
+		if ((keys & Key.A) != 0) { keyReleased(keyA); }
+		if ((keys & Key.Y) != 0) { keyReleased(keyY); }
 	}
 	public void checkPause() {
 		if (ConfigData.slaveMode) {

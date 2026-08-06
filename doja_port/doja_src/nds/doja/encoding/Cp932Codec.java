@@ -154,10 +154,6 @@ public final class Cp932Codec {
             }
             input.close();
             input = null;
-            System.out.print("DoJa SJIS ready: decode=");
-            System.out.print(singleCount + doubleCount);
-            System.out.print(" encode=");
-            System.out.println(reverseCount);
         } catch (Exception ignored) {
             single = null;
             doubleByte = null;

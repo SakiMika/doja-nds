@@ -1,6 +1,6 @@
 // Nintendo DS entry point for the standalone DoJa/KVM build.
 // The selected i-appli JAR, ScratchPad and Japanese bitmap font are linked
-// directly into ARM9. The lower screen shows only persistent-save status.
+// directly into ARM9. The lower screen is reserved for compact save status and DLDI state.
 
 #include <global.h>
 #include <nds.h>
@@ -10,15 +10,17 @@
 
 #include "file.h"
 #include "standalone_game.h"
+#include "doja_port_version.h"
 
-#if DOJA_PORT_BUILD_VERSION != 25
-#error "Wrong generated DoJa metadata: run build_doja.bat for v25"
+#if DOJA_PORT_BUILD_VERSION != DOJA_SOURCE_PORT_VERSION
+#error "Wrong generated DoJa metadata: run build_doja.bat for this source version"
 #endif
 #if DEFAULTHEAPSIZE != (2432*1024)
-#error "DoJa v25 requires a 2432 KiB Java heap"
+#error "DoJa v41 requires a 2432 KiB DS fallback heap"
 #endif
+#define DOJA_DSI_HEAPSIZE (8*1024*1024)
 #if ENABLE_HEAP_COMPACTION != 0
-#error "DoJa v25 keeps KVM heap compaction disabled"
+#error "DoJa v41 keeps KVM heap compaction disabled"
 #endif
 
 extern char *UserClassPath;
@@ -29,9 +31,11 @@ extern void pstrosSetVmConsoleEnabled(int enabled);
 extern void pstrosAudioDiagInit(void);
 extern void pstrosAudioDiagVmError(const char *message);
 extern void pstrosAudioDiagKvmExit(int result);
-extern int pstrosMountSaveStorageDirect(void);
+extern int pstrosMountSaveStorageAuto(const char *launchPath);
 extern const char *pstrosGetSavePath(void);
+extern const char *pstrosGetSaveBackendName(void);
 extern int pstrosGetSaveErrno(void);
+extern int pstrosGetSaveStage(void);
 extern int dojaSpPersistenceInit(const char *path);
 extern int dojaSpPersistenceFlush(void);
 
@@ -39,17 +43,43 @@ static int dojaSaveStorageReady = 0;
 static int dojaSaveLastState = 0;
 static int dojaSaveLastSlot = 0;
 static int dojaSaveLastCode = 0;
+static int dojaSaveMountErrno = 0;
+static int dojaSaveMountStage = 0;
+static const char *dojaBootStage = "POWER ON";
+static long dojaHeapBytes = DEFAULTHEAPSIZE;
+
+static const char *dojaSaveStageName(int stage) {
+    switch (stage) {
+        case 10: return "EXISTING VOLUME";
+        case 20: return "LIBDVM INIT";
+        case 21: return "FAT WRITE TEST";
+        case 22: return "SD WRITE TEST";
+        case 40: return "NO STORAGE";
+        default: return "READY";
+    }
+}
 
 static void dojaSaveUiRender(void) {
     consoleClear();
-    iprintf("DoJa v25\n");
+    iprintf("DoJa v41\n");
     iprintf("------------------------------\n");
-    if (dojaSaveStorageReady > 0) iprintf("SAVE: READY\n");
-    else if (dojaSaveStorageReady < 0) iprintf("SAVE: RAM ONLY\n");
-    else iprintf("SAVE: CHECKING...\n");
+    iprintf("MODE: RAM-FIRST SAVE\n");
+    iprintf("BOOT: %s\n", dojaBootStage);
+    iprintf("HEAP: %ld KiB (%s)\n", dojaHeapBytes / 1024,
+            isDSiMode() ? "DSi" : "DS");
+
+    if (dojaSaveStorageReady > 0) {
+        iprintf("SAVE: READY\n");
+        iprintf("MEDIA: %s\n", pstrosGetSaveBackendName());
+    } else if (dojaSaveStorageReady < 0) {
+        iprintf("SAVE: RAM BUFFER\n");
+        iprintf("MEDIA: NOT ATTACHED\n");
+    } else {
+        iprintf("SAVE: CHECKING...\n");
+    }
 
     switch (dojaSaveLastState) {
-        case 1: iprintf("LAST: NO EXTERNAL SAVE\n"); break;
+        case 1: iprintf("LAST: NO SAVE FILE\n"); break;
         case 2: iprintf("LAST: SAVE LOADED\n"); break;
         case 3:
             if (dojaSaveLastSlot > 0) iprintf("LAST: SAVING SLOT %d...\n", dojaSaveLastSlot);
@@ -60,22 +90,43 @@ static void dojaSaveUiRender(void) {
             else iprintf("LAST: SAVED\n");
             break;
         case 5:
-            if (dojaSaveLastSlot > 0) iprintf("LAST: FAILED SLOT %d (%d)\n", dojaSaveLastSlot, dojaSaveLastCode);
-            else iprintf("LAST: SAVE FAILED (%d)\n", dojaSaveLastCode);
+            if (dojaSaveLastSlot > 0) iprintf("LAST: FAILED SLOT %d\n", dojaSaveLastSlot);
+            else iprintf("LAST: SAVE FAILED\n");
+            iprintf("WRITE CODE: %d\n", dojaSaveLastCode);
+            break;
+        case 6:
+            iprintf("LAST: RAM BUFFERED (%d)\n", dojaSaveLastCode);
             break;
         default: iprintf("LAST: NOT SAVED YET\n"); break;
     }
+
     if (dojaSaveStorageReady > 0) {
-        iprintf("\nFILE: %s\n", STANDALONE_SHORT_SAVE_NAME);
-    } else {
-        iprintf("\nFILE: not available\n");
-        if (dojaSaveLastCode != 0) iprintf("FAT ERROR: %d\n", dojaSaveLastCode);
+        iprintf("\nFILE: %s\n", pstrosGetSavePath());
+    } else if (dojaSaveStorageReady < 0) {
+        iprintf("\nSTAGE: %s (%d)\n",
+                dojaSaveStageName(dojaSaveMountStage), dojaSaveMountStage);
+        if (dojaSaveMountErrno != 88) {
+            iprintf("ERRNO: %d\n", dojaSaveMountErrno);
+        }
+        iprintf("GAME: CONTINUES IN RAM\n");
     }
+}
+
+
+static void dojaBootUiStage(const char *stage) {
+    dojaBootStage = stage != NULL ? stage : "UNKNOWN";
+    dojaSaveUiRender();
 }
 
 void dojaSaveUiStorage(int ready, int errorCode) {
     dojaSaveStorageReady = ready ? 1 : -1;
-    if (!ready) dojaSaveLastCode = errorCode;
+    if (ready) {
+        dojaSaveMountErrno = 0;
+        dojaSaveMountStage = 0;
+    } else {
+        dojaSaveMountErrno = errorCode;
+        dojaSaveMountStage = pstrosGetSaveStage();
+    }
     dojaSaveUiRender();
 }
 
@@ -97,7 +148,13 @@ void dojaSaveUiResult(int success, int slot, int resultCode) {
     dojaSaveLastState = success ? 4 : 5;
     dojaSaveLastSlot = slot;
     dojaSaveLastCode = resultCode;
-    if (!success && resultCode == -1) dojaSaveStorageReady = -1;
+    dojaSaveUiRender();
+}
+
+void dojaSaveUiBuffered(int dirtyChunks) {
+    dojaSaveLastState = 6;
+    dojaSaveLastSlot = 0;
+    dojaSaveLastCode = dirtyChunks;
     dojaSaveUiRender();
 }
 
@@ -121,13 +178,14 @@ static int validate_embedded_jar(void) {
 
 int main(int argc, char **argv) {
     int result;
+    const char *launchPath = NULL;
     char classArg[224];
     char paramArg[128];
-    char screenArg[32];
-    char *kvm_argv[4];
+    char screenXArg[32];
+    char screenYArg[32];
+    char *kvm_argv[5];
 
-    (void)argc;
-    (void)argv;
+    if (argc > 0 && argv != NULL) launchPath = argv[0];
 
     videoSetMode(MODE_0_2D);
     videoSetModeSub(MODE_0_2D);
@@ -136,12 +194,20 @@ int main(int argc, char **argv) {
     consoleDemoInit();
     soundEnable();
     pstrosAudioDiagInit();
-    pstrosSetVmConsoleEnabled(0);
-    dojaSaveUiRender();
+    /* v41 keeps the VM console visible until the game renders.  v38 hid
+     * Java exceptions, so a failed app.start() looked identical to a hang. */
+    pstrosSetVmConsoleEnabled(1);
 
+    /* Bring the system IRQ path online before libdvm initializes DLDI/DSi SD. */
+    irqSet(IRQ_VBLANK, kvm_vblank_handler);
+    lcdSetVBlankIrq(true);
+    irqEnable(IRQ_VBLANK);
+
+    dojaBootUiStage("ROM CHECK");
     if (!validate_embedded_jar()) wait_forever();
+    dojaBootUiStage("SAVE PROBE");
 
-    if (pstrosMountSaveStorageDirect()) {
+    if (pstrosMountSaveStorageAuto(launchPath)) {
         int restored = dojaSpPersistenceInit(pstrosGetSavePath());
         dojaSaveUiStorage(1, 0);
         dojaSaveUiLoaded(restored);
@@ -149,28 +215,35 @@ int main(int argc, char **argv) {
         dojaSaveUiStorage(0, pstrosGetSaveErrno());
     }
 
-    irqSet(IRQ_VBLANK, kvm_vblank_handler);
-    lcdSetVBlankIrq(true);
-    irqEnable(IRQ_VBLANK);
-
+    dojaBootUiStage("MANIFEST");
     initJadBuffer();
     if (!setJadBufferText(STANDALONE_PROPERTIES_TEXT)) {
         pstrosAudioDiagVmError("manifest memory failed");
         wait_forever();
     }
 
-    RequestedHeapSize = DEFAULTHEAPSIZE;
+    /* FF4A and other large DoJa titles exhaust the old fixed 2432 KiB heap.
+     * Keep the DS-safe budget in NTR mode, but use the extra DSi RAM whenever
+     * the ROM is launched in DSi mode (melonDS reports this through isDSiMode). */
+    dojaHeapBytes = isDSiMode() ? DOJA_DSI_HEAPSIZE : DEFAULTHEAPSIZE;
+    RequestedHeapSize = dojaHeapBytes;
     UserClassPath = STANDALONE_CLASSPATH;
 
     kvm_argv[0] = "nds.doja.MainApp";
     snprintf(classArg, sizeof(classArg), "-C%s", DOJA_APP_CLASS);
     snprintf(paramArg, sizeof(paramArg), "-P%s", DOJA_APP_PARAM);
-    snprintf(screenArg, sizeof(screenArg), "-Y%d", DOJA_SCREEN_Y);
+    snprintf(screenXArg, sizeof(screenXArg), "-X%d", DOJA_SCREEN_X);
+    snprintf(screenYArg, sizeof(screenYArg), "-Y%d", DOJA_SCREEN_Y);
     kvm_argv[1] = classArg;
     kvm_argv[2] = paramArg;
-    kvm_argv[3] = screenArg;
+    kvm_argv[3] = screenXArg;
+    kvm_argv[4] = screenYArg;
 
-    result = StartJVM(4, kvm_argv);
+    dojaBootUiStage("JVM START");
+    iprintf("\nAPP: %s\nPARAM: %s\n", DOJA_APP_CLASS, DOJA_APP_PARAM);
+    iprintf("VM CONSOLE: ON\n");
+    result = StartJVM(5, kvm_argv);
+    iprintf("\nJVM RETURNED: %d\n", result);
     dojaSpPersistenceFlush();
     pstrosAudioDiagKvmExit(result);
     freeJadBuffer();

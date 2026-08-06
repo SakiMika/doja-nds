@@ -62,52 +62,27 @@ public abstract class Canvas extends Frame {
         serviceRepaints();
     }
 
-    private static void logDoJa(String action, int keyCode, int key) {
-        System.out.print("DOJA ");
-        System.out.print(action);
-        System.out.print(" j2me=");
-        System.out.print(keyCode);
-        System.out.print(" key=");
-        System.out.println(key);
-    }
-
-    private static void logSent(int type, int key) {
-        System.out.print("DOJA SENT t=");
-        System.out.print(type);
-        System.out.print(" key=");
-        System.out.println(key);
-    }
-
     protected final void keyPressed(int keyCode) {
         int key = mapKey(keyCode);
-        logDoJa("DN", keyCode, key);
         if (key >= 0) {
             keypadState |= (1 << key);
             processEvent(Display.KEY_PRESSED_EVENT, key);
-            logSent(Display.KEY_PRESSED_EVENT, key);
-        } else {
-            System.out.print("DOJA DROP ");
-            System.out.println(keyCode);
         }
     }
 
     protected final void keyRepeated(int keyCode) {
         int key = mapKey(keyCode);
-        logDoJa("RP", keyCode, key);
         if (key >= 0) {
             keypadState |= (1 << key);
             processEvent(Display.KEY_PRESSED_EVENT, key);
-            logSent(Display.KEY_PRESSED_EVENT, key);
         }
     }
 
     protected final void keyReleased(int keyCode) {
         int key = mapKey(keyCode);
-        logDoJa("UP", keyCode, key);
         if (key >= 0) {
             keypadState &= ~(1 << key);
             processEvent(Display.KEY_RELEASED_EVENT, key);
-            logSent(Display.KEY_RELEASED_EVENT, key);
         }
     }
 

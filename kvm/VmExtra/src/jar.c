@@ -380,8 +380,6 @@ loadJARFileEntry(JAR_INFO entry, const char *filename,
 {
     unsigned int filenameLength = strlen(filename);
     unsigned int nameLength;
-    int scanCount = 0;
-    printf("jar entry search: %s\n", filename);
 
 #if JAR_FILES_USE_STDIO
     unsigned char *p = (unsigned char *)str_buffer; /* temporary storage */
@@ -405,10 +403,8 @@ loadJARFileEntry(JAR_INFO entry, const char *filename,
         /* p contains the current central header */
         if (GETSIG(p) != CENSIG) { 
             /* We've reached the end of the headers */
-            printf("jar entry not found: %s scan=%d\n", filename, scanCount);
             return NULL;
         } 
-        scanCount++;
         nameLength = CENNAM(p);
         if (nameLength == filenameLength) { 
 #if JAR_FILES_USE_STDIO
@@ -418,7 +414,6 @@ loadJARFileEntry(JAR_INFO entry, const char *filename,
             }
 #endif
             if (memcmp(p + CENHDRSIZ, filename, nameLength) == 0) { 
-                printf("jar entry found: %s scan=%d\n", filename, scanCount);
                 break;
             } 
         }
@@ -431,90 +426,9 @@ loadJARFileEntry(JAR_INFO entry, const char *filename,
         p += CENHDRSIZ + nameLength + CENEXT(p) + CENCOM(p);
 #endif
     }
-    {
-        void *jr = loadJARFileEntryInternal(entry, p, lengthP, extraBytes);
-
-        /*
-         * Corpse Party NewChapter has a startup state that enters the
-         * handset network downloader when its marker check fails.  The
-         * complete ScratchPad is already embedded in this standalone ROM,
-         * so force the downloaded j.class to select state 10 (offline load).
-         *
-         * This runtime guard is deliberately applied after ZIP CRC checking.
-         * It therefore works even when a stale/original game.jar somehow
-         * reaches the ROM and is independent from the prepare-time patch.
-         */
-        if (jr != NULL && strcmp(filename, "j.class") == 0 && *lengthP > 8) {
-            unsigned char *classData = ((unsigned char *)jr) + extraBytes;
-            long classLength = *lengthP;
-            static const unsigned char directNetwork[] = {
-                0x10, 0x09, 0xB3, 0x02, 0xA9
-            };
-            static const unsigned char networkGate[] = {
-                0xB2, 0x02, 0xA9, 0x10, 0x09, 0xA0, 0x02, 0x93
-            };
-            static const unsigned char forcedGate[] = {
-                0x10, 0x0A, 0xB3, 0x02, 0xA9, 0xA7, 0x02, 0x93
-            };
-            static const unsigned char loadingProgress[] = {
-                0xB2, 0x02, 0x8F, 0x11, 0x10, 0x00, 0x68,
-                0xB2, 0x02, 0x90, 0x6C
-            };
-            static const unsigned char safeLoadingProgress[] = {
-                0xB2, 0x02, 0x8F, 0x11, 0x10, 0x00, 0x68,
-                0x10, 0x0A, 0x00, 0x6C
-            };
-            int directCount = 0;
-            int gateCount = 0;
-            int progressCount = 0;
-            int offlineCount = 0;
-            int forcedGateCount = 0;
-            int safeProgressCount = 0;
-            long i;
-
-            for (i = 0; i + (long)sizeof(directNetwork) <= classLength; i++) {
-                if (memcmp(classData + i, directNetwork, sizeof(directNetwork)) == 0) {
-                    classData[i + 1] = 0x0A;
-                    directCount++;
-                }
-            }
-            for (i = 0; i + (long)sizeof(networkGate) <= classLength; i++) {
-                if (memcmp(classData + i, networkGate, sizeof(networkGate)) == 0) {
-                    memcpy(classData + i, forcedGate, sizeof(forcedGate));
-                    gateCount++;
-                }
-            }
-            for (i = 0; i + (long)sizeof(loadingProgress) <= classLength; i++) {
-                if (memcmp(classData + i, loadingProgress, sizeof(loadingProgress)) == 0) {
-                    memcpy(classData + i, safeLoadingProgress, sizeof(safeLoadingProgress));
-                    progressCount++;
-                }
-            }
-            for (i = 0; i + (long)sizeof(directNetwork) <= classLength; i++) {
-                if (classData[i] == 0x10 && classData[i + 1] == 0x0A &&
-                    classData[i + 2] == 0xB3 && classData[i + 3] == 0x02 &&
-                    classData[i + 4] == 0xA9) {
-                    offlineCount++;
-                }
-            }
-            for (i = 0; i + (long)sizeof(forcedGate) <= classLength; i++) {
-                if (memcmp(classData + i, forcedGate, sizeof(forcedGate)) == 0) {
-                    forcedGateCount++;
-                }
-            }
-            for (i = 0; i + (long)sizeof(safeLoadingProgress) <= classLength; i++) {
-                if (memcmp(classData + i, safeLoadingProgress, sizeof(safeLoadingProgress)) == 0) {
-                    safeProgressCount++;
-                }
-            }
-            printf("OFFLINE RUNTIME PATCH j.class changed=%d/%d progress=%d active=%d/%d/%d\n",
-                   directCount, gateCount, progressCount,
-                   offlineCount, forcedGateCount, safeProgressCount);
-        }
-
-        printf("jar entry load result: %s ptr=%p len=%ld\n", filename, jr, jr ? *lengthP : -1L);
-        return jr;
-    }
+    /* The loader stays game-neutral. Compatibility patches are applied only
+     * by prepare_doja.py after an exact game signature match. */
+    return loadJARFileEntryInternal(entry, p, lengthP, extraBytes);
 }
 
 /*=========================================================================
@@ -648,7 +562,7 @@ loadJARFileEntryInternal(JAR_INFO entry, const unsigned char *centralInfo,
     unsigned long expectedCRC = CENCRC(centralInfo); /* expected CRC */
     unsigned long actualCRC;
     unsigned char *result = NULL;
-    printf("jar internal: method=%lu comp=%lu decomp=%lu extra=%d\n", method, compLen, decompLen, extraBytes);
+    /* v41: hot-path JAR trace disabled. */
 
 #if JAR_FILES_USE_STDIO
     FILE *file = entry->u.jar.file;
@@ -667,9 +581,9 @@ loadJARFileEntryInternal(JAR_INFO entry, const unsigned char *centralInfo,
     /* This may cause a GC, so we have to extract out of "entry" all the
      * info we need, before calling this.
      */
-    printf("jar malloc: %lu\n", (unsigned long)(extraBytes + decompLen));
+    /* v41: hot-path JAR trace disabled. */
     result = (unsigned char *)mallocBytes(extraBytes + decompLen);
-    printf("jar malloc ok: %p\n", result);
+    /* v41: hot-path JAR trace disabled. */
 #if !COMPILING_FOR_KVM
     if (result == NULL) {
         goto errorReturn;
@@ -721,11 +635,11 @@ loadJARFileEntryInternal(JAR_INFO entry, const unsigned char *centralInfo,
                 memoryInput.remaining = (int)compLen + INFLATER_EXTRA_BYTES;
                 arg = &memoryInput;
 #endif
-                printf("jar inflate begin comp=%lu decomp=%lu\n", compLen, decompLen);
+                /* v41: hot-path JAR trace disabled. */
                 inflateOK = inflateData(arg, 
                                (JarGetByteFunctionType)jar_getBytes, compLen, 
                                     &decompData, decompLen);
-                printf("jar inflate end ok=%d\n", inflateOK);
+                /* v41: hot-path JAR trace disabled. */
                 /* The inflater can allocate memory, so we need to regenerate
                  * value from decompData. */
                 result = decompData - extraBytes;
@@ -743,15 +657,15 @@ loadJARFileEntryInternal(JAR_INFO entry, const unsigned char *centralInfo,
     }
 
     if (result != NULL) { 
-        printf("jar crc begin len=%lu\n", decompLen);
+        /* v41: hot-path JAR trace disabled. */
         actualCRC = jarCRC32(result + extraBytes, decompLen);
-        printf("jar crc end actual=%lu expected=%lu\n", actualCRC, expectedCRC);
+        /* v41: hot-path JAR trace disabled. */
         if (actualCRC != expectedCRC) { 
             goto errorReturn;
         }
     }
     *lengthP = decompLen;
-    printf("jar internal ok len=%lu result=%p\n", decompLen, result);
+    /* v41: hot-path JAR trace disabled. */
     return (void *)result;
 
 errorReturn:    

@@ -162,16 +162,15 @@ void Java_com_sun_cldc_io_ResourceInputStream_size(void) {
 }
 
 /*=========================================================================
- * DoJa v25 ScratchPad ROM access with persistent sparse saves.
+ * DoJa v41 ScratchPad ROM access with persistent same-name .sav saves.
  *
- * The original 409600-byte ScratchPad remains linked read-only in ROM. Only
+ * The selected game ScratchPad remains linked read-only in ROM. Only
  * 256-byte chunks changed by the game are copied into a small native overlay.
- * That overlay is stored in a CRC-protected .djs file on FAT and restored
+ * That overlay is stored in a CRC-protected .sav file beside the ROM and restored
  * before the JVM starts. This avoids allocating or rewriting the full SP.
  *=======================================================================*/
 #include <stdio.h>
 #include <errno.h>
-#include <unistd.h>
 
 #include "standalone_game.h"
 
@@ -179,23 +178,23 @@ extern const unsigned char _binary_embedded_doja_scratchpad_bin_start[];
 extern const unsigned char _binary_embedded_doja_scratchpad_bin_end[];
 
 #define DOJA_SP_CHUNK_SIZE 256
-#define DOJA_SP_MAX_DIRTY_CHUNKS 96
+#define DOJA_SP_MAX_DIRTY_CHUNKS 256
 #define DOJA_SP_SAVE_HEADER_SIZE 28
 #define DOJA_SP_SAVE_VERSION 1
 #define DOJA_SP_PATH_MAX 255
-#define DOJA_CP_SLOT_BASE 5
-#define DOJA_CP_SLOT_SIZE 1563
-#define DOJA_CP_SLOT_COUNT 3
 
 static int dojaSpChunkIds[DOJA_SP_MAX_DIRTY_CHUNKS];
 static unsigned char dojaSpChunks[DOJA_SP_MAX_DIRTY_CHUNKS][DOJA_SP_CHUNK_SIZE];
 static int dojaSpChunkCount = 0;
 static int dojaSpDirty = 0;
 static int dojaSpPersistenceReady = 0;
+/* Once storage is known to be absent, writes stay in the sparse RAM overlay.
+ * Do not retry media detection from the byte-write hot path. */
+static int dojaSpStorageUnavailable = 0;
+static int dojaSpRamBufferReported = 0;
 static char dojaSpSavePath[DOJA_SP_PATH_MAX + 1];
 static char dojaSpTempPath[DOJA_SP_PATH_MAX + 1];
 static char dojaSpLegacyPath[DOJA_SP_PATH_MAX + 1];
-static int dojaSpLastSlot = 0;
 
 extern int pstrosMountSaveStorageDirect(void);
 extern const char *pstrosGetSavePath(void);
@@ -204,21 +203,11 @@ extern void dojaSaveUiStorage(int ready, int errorCode);
 extern void dojaSaveUiLoaded(int loadedChunks);
 extern void dojaSaveUiSaving(int slot);
 extern void dojaSaveUiResult(int success, int slot, int resultCode);
+extern void dojaSaveUiBuffered(int dirtyChunks);
 
 int dojaSpPersistenceInit(const char *path);
 int dojaSpPersistenceFlush(void);
 
-static int dojaSpDetectSlot(int position, int length) {
-    int relative;
-    int slot;
-    if (length <= 0) return 0;
-    if (position < DOJA_CP_SLOT_BASE ||
-        position >= DOJA_CP_SLOT_BASE + DOJA_CP_SLOT_SIZE * DOJA_CP_SLOT_COUNT) return 0;
-    relative = position - DOJA_CP_SLOT_BASE;
-    slot = relative / DOJA_CP_SLOT_SIZE;
-    if (position + length > DOJA_CP_SLOT_BASE + (slot + 1) * DOJA_CP_SLOT_SIZE) return 0;
-    return slot + 1;
-}
 
 static int dojaSpConfigurePersistencePath(const char *path) {
     size_t length;
@@ -228,15 +217,11 @@ static int dojaSpConfigurePersistencePath(const char *path) {
     }
     snprintf(dojaSpSavePath, sizeof(dojaSpSavePath), "%s", path);
 
-    /* Keep the temporary file 8.3-compatible too. Appending ".tmp" to
-       CPN1.DJS produced CPN1.DJS.tmp, which some old DLDI/libfat stacks
-       cannot create even though the final short filename is valid. */
+    /* Keep the temporary file extension short. Both the same-name .sav path
+       and any short-name fallback become a sibling .TMP file. */
     snprintf(dojaSpTempPath, sizeof(dojaSpTempPath), "%s", path);
     length = strlen(dojaSpTempPath);
-    if (length >= 4 && dojaSpTempPath[length - 4] == '.' &&
-        ((dojaSpTempPath[length - 3] == 'D' || dojaSpTempPath[length - 3] == 'd') &&
-         (dojaSpTempPath[length - 2] == 'J' || dojaSpTempPath[length - 2] == 'j') &&
-         (dojaSpTempPath[length - 1] == 'S' || dojaSpTempPath[length - 1] == 's'))) {
+    if (length >= 4 && dojaSpTempPath[length - 4] == '.') {
         memcpy(dojaSpTempPath + length - 4, ".TMP", 5);
     } else {
         snprintf(dojaSpTempPath, sizeof(dojaSpTempPath), "%s.tmp", path);
@@ -251,7 +236,9 @@ static int dojaSpConfigurePersistencePath(const char *path) {
 static int dojaSpEnsurePersistence(void) {
     int restored;
     if (dojaSpPersistenceReady) return 1;
+    if (dojaSpStorageUnavailable) return 0;
     if (!pstrosMountSaveStorageDirect()) {
+        dojaSpStorageUnavailable = 1;
         dojaSaveUiStorage(0, pstrosGetSaveErrno());
         return 0;
     }
@@ -260,6 +247,7 @@ static int dojaSpEnsurePersistence(void) {
        immediately persist the in-memory changes instead. */
     if (dojaSpDirty || dojaSpChunkCount > 0) {
         if (!dojaSpConfigurePersistencePath(pstrosGetSavePath())) return 0;
+        dojaSpRamBufferReported = 0;
         dojaSaveUiStorage(1, 0);
         return 1;
     }
@@ -270,7 +258,7 @@ static int dojaSpEnsurePersistence(void) {
 }
 
 static int dojaSpFail(int code) {
-    dojaSaveUiResult(0, dojaSpLastSlot, code);
+    dojaSaveUiResult(0, 0, code);
     return code;
 }
 
@@ -455,7 +443,6 @@ static int dojaSpCopyFile(const char *source, const char *destination) {
     }
     if (ferror(in)) ok = 0;
     if (fflush(out) != 0) ok = 0;
-    fsync(fileno(out));
     if (fclose(out) != 0) ok = 0;
     fclose(in);
     return ok;
@@ -575,7 +562,6 @@ static int dojaSpWriteOverlayFile(const char *path) {
         fclose(fp);
         return -5;
     }
-    fsync(fileno(fp));
     if (fclose(fp) != 0) return -6;
     return 1;
 }
@@ -584,15 +570,21 @@ int dojaSpPersistenceFlush(void) {
     int writeResult;
     int renamed = 0;
 
-    if (!dojaSpPersistenceReady && !dojaSpEnsurePersistence()) {
-        return dojaSpFail(-1);
-    }
     if (!dojaSpDirty) return 0;
-    dojaSaveUiSaving(dojaSpLastSlot);
+    if (!dojaSpPersistenceReady && !dojaSpEnsurePersistence()) {
+        /* Non-fatal RAM fallback. The i-appli has already updated the overlay,
+         * so report buffering and let the game continue normally. */
+        if (!dojaSpRamBufferReported) {
+            dojaSaveUiBuffered(dojaSpChunkCount);
+            dojaSpRamBufferReported = 1;
+        }
+        return 0;
+    }
+    dojaSaveUiSaving(0);
 
-    /* First use an 8.3-compatible temporary file (for example CPN1.TMP).
-       If the flashcart cannot create/verify it, fall back to a direct verified
-       write of CPN1.DJS instead of silently losing the save. */
+    /* First use a sibling temporary file.
+       If the launcher cannot create/verify it, fall back to a direct verified
+       write of the final .sav file instead of silently losing the save. */
     writeResult = dojaSpWriteOverlayFile(dojaSpTempPath);
     if (writeResult < 0 || !dojaSpValidateFile(dojaSpTempPath)) {
         remove(dojaSpTempPath);
@@ -600,7 +592,7 @@ int dojaSpPersistenceFlush(void) {
         if (writeResult < 0) return dojaSpFail(writeResult);
         if (!dojaSpValidateFile(dojaSpSavePath)) return dojaSpFail(-9);
         dojaSpDirty = 0;
-        dojaSaveUiResult(1, dojaSpLastSlot, 2); /* direct-write fallback */
+        dojaSaveUiResult(1, 0, 2); /* direct-write fallback */
         return 1;
     }
 
@@ -621,13 +613,15 @@ int dojaSpPersistenceFlush(void) {
     }
     if (!renamed) remove(dojaSpTempPath);
     dojaSpDirty = 0;
-    dojaSaveUiResult(1, dojaSpLastSlot, 1);
+    dojaSaveUiResult(1, 0, 1);
     return 1;
 }
 
 int dojaSpPersistenceInit(const char *path) {
     int loaded;
     if (!dojaSpConfigurePersistencePath(path)) return -1;
+    dojaSpStorageUnavailable = 0;
+    dojaSpRamBufferReported = 0;
     dojaSpResetOverlay();
 
     loaded = dojaSpLoadFile(dojaSpSavePath);
@@ -706,7 +700,7 @@ void Java_com_sun_cldc_io_j2me_scratchpad_Protocol_nativeWrite(void) {
     int size = dojaSpSize();
     int chunk;
     if (position < 0 || position >= size) return;
-    if (!dojaSpPersistenceReady) dojaSpEnsurePersistence();
+    /* v41: never mount/probe storage from a single-byte write. */
     chunk = dojaSpFindChunk(position / DOJA_SP_CHUNK_SIZE, 1);
     if (chunk >= 0) {
         dojaSpChunks[chunk][position % DOJA_SP_CHUNK_SIZE] =
@@ -731,7 +725,7 @@ void Java_com_sun_cldc_io_j2me_scratchpad_Protocol_nativeWriteBytes(void) {
     }
     if (position >= size) return;
     if (length > size - position) length = size - position;
-    if (!dojaSpPersistenceReady) dojaSpEnsurePersistence();
+    /* Buffer first; persistence is attempted only at the flush boundary. */
     for (i = 0; i < length; i++) {
         int absolute = position + i;
         int chunk = dojaSpFindChunk(absolute / DOJA_SP_CHUNK_SIZE, 1);
@@ -743,8 +737,7 @@ void Java_com_sun_cldc_io_j2me_scratchpad_Protocol_nativeWriteBytes(void) {
     }
     if (wrote) {
         dojaSpDirty = 1;
-        dojaSpLastSlot = dojaSpDetectSlot(position, length);
-        /* Corpse Party writes one complete 1563-byte slot in this bulk call. */
+        /* One bounded persistence attempt at the bulk-write boundary. */
         dojaSpPersistenceFlush();
     }
 }

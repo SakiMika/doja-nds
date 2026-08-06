@@ -37,6 +37,9 @@ static void* KNI_GetRawArrayRegionPtr(jarray arrayHandle, jsize offset) {
 extern const unsigned char _binary_embedded_osnd_native_pcm_start[];
 extern const unsigned char _binary_embedded_osnd_native_pcm_end[];
 
+/* Routine Java/class-loader output is useful before the first frame, but
+ * printing every runtime event to the sub-screen is extremely expensive. */
+
 /*
  * Minimal runtime console requested for the standalone build. Normal KVM,
  * class-loader, RMS and inflater logs stay hidden. Only the latest audio read
@@ -598,12 +601,16 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 	jshort* dst  = (jshort *) KNI_GetRawArrayRegionPtr(dstArrayHandle, 0);
 	jshort* src  = (jshort *) KNI_GetRawArrayRegionPtr(srcArrayHandle, 0);
 	char* alpha = (char*) KNI_GetRawArrayRegionPtr(alphaArrayHandle, 0);
+	int directDst = ((unsigned long)dst < 0x0FUL);
 
 	//direct rendering to the screen
-	if (dst < 0xF) { // == NULL
+	if (directDst) {
 		dst = (jshort*) BG_BMP_RAM(0);
-		// iprintf("\x1b[19B dst =%p src=%p \n", dst, src);
 	}
+
+	/* DoJa v41 native viewport: never resample the game frame.
+	 * The Java bridge positions the 240x240 canvas at X=8, Y=-24,
+	 * so the DS shows a centered 240x192 window with original pixels. */
 	//check the alpha channel exists
 	hasAlpha = 1;
 	if (alpha < 0xF) { // == NULL

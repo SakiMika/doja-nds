@@ -246,9 +246,7 @@ openClassfile(INSTANCE_CLASS clazz) {
             strcpy(to, ".class");
         END_ASSERTING_NO_ALLOCATION
 
-        printf("open class: %s\n", fileName);
         ClassFile = openClassfileInternal(&fileName);
-        printf("open class result: %s %s\n", fileName, ClassFile ? "ok" : "null");
         if (ClassFile == NULL) {
 #if INCLUDEDEBUGCODE
             if (traceclassloadingverbose) {

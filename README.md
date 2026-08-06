@@ -1,44 +1,52 @@
-# DoJa NDS Port v25
+# DoJa NDS Port v41 — giảm chớp hình và tăng tốc tải
 
-Nhánh DoJa độc lập với PSTros. Bản này giữ font Nhật CP932/SJIS tích hợp sẵn, ScratchPad đọc trực tiếp từ ROM và icon mặc định trong `assets/default_standalone_icon.bmp`.
+v41 tiếp tục giữ hai nguyên tắc:
 
-## Save v25
+1. **Không ép fit** khung DoJa 240×240 sang 256×192.
+2. **Không khóa theo một game**; khi đổi JAR/JAM/SP, lớp chính, ScratchPad và tên save đều được sinh lại.
 
-Corpse Party lưu ba slot trực tiếp trong ScratchPad. Bản v25 nhận diện đúng vùng ghi:
+## Lỗi đã quan sát ở v40
 
-- Slot 1: offset 5, dài 1563 byte.
-- Slot 2: offset 1568, dài 1563 byte.
-- Slot 3: offset 3131, dài 1563 byte.
+FF4A đã vào được màn hình tiêu đề, nhưng:
 
-Save được lưu ở thư mục gốc của thiết bị FAT bằng tên 8.3 lấy từ mã ROM. Ví dụ mã ROM `CPN1` tạo:
+- tải tài nguyên lâu;
+- màn hình dưới liên tục cuộn log `DOJA SENT`, `Thread.start...`, tìm class/JAR;
+- khung hình có thể chớp vì `flushBuffer()` đưa từng trạng thái trung gian lên màn hình dù game vẫn đang ở trong `Graphics.lock()`.
+
+## Thay đổi v41
+
+- `Graphics.flushBuffer()` chỉ đánh dấu frame đang chờ khi còn nằm trong `lock()`.
+- Chỉ trình bày **một frame hoàn chỉnh** khi `unlock()` ngoài cùng kết thúc.
+- Loại bỏ log nóng khỏi đường input, tạo thread, tìm class và đọc JAR.
+- Tắt các log thành công khi boot, nạp font và CP932; lỗi nghiêm trọng vẫn được in.
+- Tái sử dụng cây Huffman cố định của DEFLATE thay vì dựng lại ở mỗi block.
+- Sao chép chuỗi LZ bằng `System.arraycopy()` theo khối thay vì từng byte.
+- Tăng bộ đệm đọc JAR từ 2 KiB lên 8 KiB.
+- Giữ API `Palette`, `PalettedImage`, `graphics3d`, SJIS/CP932 và RAM-first save của v40.
+
+## Hiển thị nguyên tỉ lệ
+
+Game vẫn chạy trong hệ tọa độ 240×240, mặc định:
 
 ```text
-fat:/CPN1.DJS
+X = 8
+Y = -24
 ```
 
-File tạm cũng dùng tên 8.3 `CPN1.TMP`, tránh lỗi của flashcart/DLDI cũ với tên `CPN1.DJS.tmp`. Bản v25 thử lại mount DLDI ngay lúc game ghi save, ghi file tạm rồi đọc kiểm tra CRC; nếu rename/copy không hoạt động, nó chuyển sang ghi trực tiếp và kiểm tra lại file cuối.
+NDS hiển thị vùng giữa 240×192 bằng pixel nguyên bản; không kéo ngang và không nén dọc.
 
-## Trạng thái màn hình dưới
+## Chuẩn bị game khác
+
+Chạy `build_doja.bat`, chọn JAR, JAM và SP, sau đó nhập mã lưu bốn ký tự. Công cụ xóa metadata game cũ trước khi tạo bộ mới.
+
+## FF4A prepared
 
 ```text
-SAVE: READY
-LAST: SAVED SLOT 3
-FILE: CPN1.DJS
+AppClass: FF4A
+AppParam: 131 0
+ScratchPad: 778240 bytes
+Viewport: 240x240 at X=8, Y=-24
+Expected ROM: final_fantasy_iv_the_after_doja_v41.nds
 ```
 
-`SAVED SLOT n` chỉ xuất hiện sau khi file cuối đã được đọc lại và xác minh. Các trạng thái khác:
-
-- `SAVE: RAM ONLY`: FAT/DLDI chưa dùng được; thay đổi chưa tồn tại sau khi tắt máy.
-- `LAST: SAVE LOADED`: đã nạp file `.DJS` lúc khởi động.
-- `LAST: SAVING SLOT n`: đang ghi.
-- `LAST: SAVE FAILED (-n)`: lỗi ở một bước ghi hoặc xác minh; mã lỗi được giữ trên màn hình.
-
-## Build
-
-Giải nén source vào thư mục mới rồi chạy:
-
-```bat
-build_doja.bat
-```
-
-Build tự tạo `last_prepare.log`, `last_build.log` và ROM có hậu tố `_doja_v25.nds`.
+Nên thử bằng melonDS ở DSi mode. v41 chưa được boot trực tiếp trong môi trường đóng gói này vì không có devkitARM, ndstool và melonDS.

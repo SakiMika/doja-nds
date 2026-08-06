@@ -27,6 +27,15 @@ public abstract class IApplication {
         MainApp.requestTerminate();
     }
 
+    /** DoJa inter-i-appli launch entry. On the standalone NDS port the
+        requested launch arguments are retained for a clean in-ROM restart. */
+    public void launch(int appId, String[] launchArgs) {
+        if (launchArgs != null && launchArgs.length > 0) {
+            args = launchArgs;
+        }
+        // A standalone ROM contains one prepared i-appli; keep running it.
+    }
+
     public static IApplication getCurrentApp() {
         return current;
     }

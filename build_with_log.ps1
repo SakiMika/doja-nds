@@ -31,14 +31,14 @@ $archiveLog = Join-Path $logDir ("build_{0}.log" -f $stamp)
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $newLine = [Environment]::NewLine
 $header = @(
-    'DoJa v25 persistent ScratchPad save + default icon + SJIS/CP932 build log'
+    'DoJa v41 native viewport + game-independent preparation + SAV build log'
     "Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
     "Project: $PSScriptRoot"
     "DEVKITPRO MSYS2: $dkpPosix"
     '============================================================'
 )
 [System.IO.File]::WriteAllLines($lastLog, $header, $utf8NoBom)
-[System.IO.File]::AppendAllText($lastLog, "Port version: v25$([Environment]::NewLine)", $utf8NoBom)
+[System.IO.File]::AppendAllText($lastLog, "Port version: v41$([Environment]::NewLine)", $utf8NoBom)
 
 function Write-LogLine([AllowEmptyString()][string]$Text) {
     Write-Host $Text
@@ -49,7 +49,7 @@ function Invoke-NativeLogged([string]$Executable, [string[]]$Arguments = @()) {
     return [int]$LASTEXITCODE
 }
 
-# v25: restore the native ScratchPad before make starts.  This catches source
+# v41: restore the native ScratchPad before make starts.  This catches source
 # overlays and accidental deletion without ever falling back to the old JAR
 # resource path that exhausted the KVM heap.
 $nativeSp = Join-Path $PSScriptRoot 'embedded\doja_scratchpad.bin'
@@ -67,8 +67,8 @@ if (-not (Test-Path -LiteralPath $nativeSp)) {
 }
 $nativeSpSize = (Get-Item -LiteralPath $nativeSp).Length
 Write-LogLine ("[CHECK] Native ScratchPad: {0} bytes" -f $nativeSpSize)
-if ($nativeSpSize -ne 409600) {
-    Write-LogLine '[ERROR] Native ScratchPad must be exactly 409600 bytes.'
+if ($nativeSpSize -le 0) {
+    Write-LogLine '[ERROR] Native ScratchPad is empty.'
     Copy-Item $lastLog $archiveLog -Force
     exit 2
 }

@@ -17,10 +17,10 @@ from fontgen import generate_font
 from cp932gen import generate_cp932_table
 from segment_stream_patch import patch_segment_streams, segment_stream_patch_counts
 
-PORT_VERSION = 25
-PORT_TAG = "v25"
-PORT_NAME = "DoJa NDS Port v25"
-PREPARED_MARKER = "prepared_v25.ok"
+PORT_VERSION = 41
+PORT_TAG = "v41"
+PORT_NAME = "DoJa NDS Port v41"
+PREPARED_MARKER = "prepared_v41.ok"
 
 
 def parse_jam(path: Path) -> dict[str, str]:
@@ -159,7 +159,13 @@ def patch_game_for_offline_boot(name: str, payload: bytes) -> tuple[bytes, list[
     Unknown games are copied unchanged.
     """
     normalized = name.replace('\\', '/')
-    if not normalized.endswith('.class') or b'init.bin' not in payload:
+    known_corpse_party_loader = (
+        normalized == 'j.class' and
+        b'init.bin' in payload and
+        b'scratchpad:///0;pos=1,length=4' in payload and
+        b'scratchpad:///0;pos=0,length=1' in payload
+    )
+    if not known_corpse_party_loader:
         return payload, []
 
     data = payload
@@ -196,13 +202,8 @@ def patch_game_for_offline_boot(name: str, payload: bytes) -> tuple[bytes, list[
     elif already_progress == 1:
         applied.append('state-10-loading-divisor-already-fixed')
 
-    # Require every guard for the known Corpse Party class. A partial match
-    # usually means a different game/version and must not be silently altered.
-    known_corpse_party_loader = (
-        b'init.bin' in payload and
-        b'scratchpad:///0;pos=1,length=4' in payload and
-        b'scratchpad:///0;pos=0,length=1' in payload
-    )
+    # Require every guard for the exact known class. A partial match means the
+    # supported version changed and must not be silently altered.
     if applied and len(applied) != 3:
         raise RuntimeError('Only part of the offline boot patch matched ' + normalized)
     if known_corpse_party_loader and not applied:
@@ -210,10 +211,24 @@ def patch_game_for_offline_boot(name: str, payload: bytes) -> tuple[bytes, list[
             'Corpse Party network loader was found, but the offline patch did not match ' + normalized
         )
 
-    if normalized == 'j.class' and known_corpse_party_loader:
+    if known_corpse_party_loader:
         data, stream_count = patch_segment_streams(data)
         applied.append('scratchpad-segment-stream-loaders=%d' % stream_count)
     return data, applied
+
+
+def detect_corpse_party_compat(jar_path: Path) -> bool:
+    """Return True only for the exact legacy downloader layout we support."""
+    with zipfile.ZipFile(jar_path, 'r') as archive:
+        try:
+            payload = archive.read('j.class')
+        except KeyError:
+            return False
+    return (
+        b'init.bin' in payload and
+        b'scratchpad:///0;pos=1,length=4' in payload and
+        b'scratchpad:///0;pos=0,length=1' in payload
+    )
 
 
 def safe_stem(value: str) -> str:
@@ -324,12 +339,54 @@ def merge_jar(original: Path, class_dir: Path, font_bin: Path, cp932_bin: Path,
             if name in written:
                 raise RuntimeError('Compatibility class collides with game JAR: ' + name)
             dest.write(class_file, name)
-        # v25: ScratchPad is linked separately as native ROM data.  Do not put
-        # the 409600-byte payload in the JAR, because KVM inflates whole JAR
+        # v41: ScratchPad is linked separately as native ROM data.  Do not put
+        # the full ScratchPad payload in the JAR, because KVM inflates whole JAR
         # resources into its heap before ResourceInputStream can read them.
         dest.write(font_bin, 'doja/jpfont.bin')
         dest.write(cp932_bin, 'doja/cp932.tbl')
 
+
+
+def verify_doja_v41_api(jar_path: Path) -> None:
+    """Verify generic DoJa image/3D/archive classes needed by FF4A-class titles."""
+    required = (
+        'com/nttdocomo/ui/Palette.class',
+        'com/nttdocomo/ui/PalettedImage.class',
+        'com/nttdocomo/ui/Graphics.class',
+        'com/nttdocomo/ui/graphics3d/Graphics3D.class',
+        'com/nttdocomo/ui/graphics3d/Object3D.class',
+        'com/nttdocomo/ui/graphics3d/DrawableObject3D.class',
+        'com/nttdocomo/ui/graphics3d/Primitive.class',
+        'com/nttdocomo/ui/graphics3d/Texture.class',
+        'com/nttdocomo/ui/graphics3d/Fog.class',
+        'com/nttdocomo/ui/util3d/FastMath.class',
+        'com/nttdocomo/ui/util3d/Transform.class',
+        'com/nttdocomo/ui/util3d/Vector3D.class',
+        'com/nttdocomo/util/JarInflater.class',
+        'com/nttdocomo/util/JarInflater$RawInflater.class',
+        'com/nttdocomo/util/JarInflater$BitReader.class',
+        'com/nttdocomo/util/JarInflater$Huffman.class',
+        'nds/doja/image/IndexedGifDecoder.class',
+    )
+    with zipfile.ZipFile(jar_path, 'r') as archive:
+        names = set(archive.namelist())
+        missing = [name for name in required if name not in names]
+        if missing:
+            raise RuntimeError('Missing v41 DoJa API class: ' + ', '.join(missing))
+        paletted = archive.read('com/nttdocomo/ui/PalettedImage.class')
+        graphics = archive.read('com/nttdocomo/ui/Graphics.class')
+        inflater = archive.read('com/nttdocomo/util/JarInflater.class')
+        raw_inflater = archive.read('com/nttdocomo/util/JarInflater$RawInflater.class')
+        if not all(token in paletted for token in (b'createPalettedImage', b'getPalette', b'setTransparentIndex')):
+            raise RuntimeError('PalettedImage.class is stale')
+        if not all(token in graphics for token in (b'Graphics3D', b'setFlipMode', b'getPixels', b'setPixels')):
+            raise RuntimeError('Graphics.class lacks v41 DoJa image/3D API')
+        if not all(token in inflater for token in (b'getInputStream', b'getSize', b'missing zip directory')):
+            raise RuntimeError('JarInflater.class is stale')
+        if not all(token in raw_inflater for token in (
+                b'LENGTH_BASE', b'DIST_BASE', b'inflate', b'FIXED_LITERAL', b'copyMatch')):
+            raise RuntimeError('JarInflater raw-DEFLATE engine is stale')
+    print('[DoJa] v41 API verify: palette image + graphics3d + ScratchPad JAR inflater')
 
 
 def verify_cp932_jar(jar_path: Path) -> None:
@@ -345,20 +402,19 @@ def verify_cp932_jar(jar_path: Path) -> None:
         )
         for name in required:
             if name not in names:
-                raise RuntimeError('Missing v25 SJIS runtime entry: ' + name)
+                raise RuntimeError('Missing v41 SJIS runtime entry: ' + name)
         table = archive.read('doja/cp932.tbl')
         bitmap_font_class = archive.read('nds/doja/font/BitmapJapaneseFont.class')
-        if (b'isNonPrintingControl' not in bitmap_font_class
-                or b'nul-padding-skip' not in bitmap_font_class):
-            raise RuntimeError('Missing v25 NUL/control padding font fix')
+        if b'isNonPrintingControl' not in bitmap_font_class:
+            raise RuntimeError('Missing v41 NUL/control padding font fix')
     if len(table) < 12 or table[:4] != b'DJC2':
-        raise RuntimeError('Invalid v25 CP932 mapping resource')
+        raise RuntimeError('Invalid v41 CP932 mapping resource')
     version, single_count, double_count, reverse_count = struct.unpack_from('>HHHH', table, 4)
     expected = 12 + single_count * 2 + double_count * 2 + reverse_count * 4
     if version != 1 or single_count != 256 or double_count != 11280:
-        raise RuntimeError('Unexpected v25 CP932 table dimensions')
+        raise RuntimeError('Unexpected v41 CP932 table dimensions')
     if reverse_count < 9000 or len(table) != expected:
-        raise RuntimeError('Truncated v25 CP932 reverse map')
+        raise RuntimeError('Truncated v41 CP932 reverse map')
     print('[DoJa] SJIS verify: default=SJIS decode=%d encode=%d table=%d' % (
         single_count + double_count, reverse_count, len(table)))
 
@@ -370,7 +426,7 @@ def verify_offline_jar(jar_path: Path) -> None:
     with zipfile.ZipFile(jar_path, 'r') as archive:
         names = set(archive.namelist())
         if 'doja/scratchpad.bin' in names:
-            raise RuntimeError('v25 game.jar must not contain doja/scratchpad.bin')
+            raise RuntimeError('v41 game.jar must not contain doja/scratchpad.bin')
         print('[DoJa] Native SP verify: JAR entry absent')
         try:
             data = archive.read('j.class')
@@ -378,8 +434,13 @@ def verify_offline_jar(jar_path: Path) -> None:
             print('[DoJa] Offline verify: no j.class (generic game)')
             return
 
-    if b'init.bin' not in data:
-        print('[DoJa] Offline verify: j.class has no Corpse Party downloader')
+    known_corpse_party_loader = (
+        b'init.bin' in data and
+        b'scratchpad:///0;pos=1,length=4' in data and
+        b'scratchpad:///0;pos=0,length=1' in data
+    )
+    if not known_corpse_party_loader:
+        print('[DoJa] Offline verify: generic j.class, no compatibility patch required')
         return
 
     direct_network = bytes.fromhex('10 09 b3 02 a9')
@@ -414,7 +475,7 @@ def verify_offline_jar(jar_path: Path) -> None:
     print('[DoJa] Segment stream verify: patched=%d legacy=%d' % (
         stream_count, legacy_stream_count))
     if stream_count != 13 or legacy_stream_count != 0:
-        raise RuntimeError('Final embedded/game.jar is missing the v25 zero-copy segment patch')
+        raise RuntimeError('Final embedded/game.jar is missing the v41 zero-copy segment patch')
 
 
 
@@ -460,7 +521,7 @@ def _class_super_name(data: bytes) -> str:
 
 
 def verify_direct_scratchpad_jar(jar_path: Path) -> None:
-    """Verify v25's separate top-level connection and input stream."""
+    """Verify v41's separate top-level connection and input stream."""
     with zipfile.ZipFile(jar_path, 'r') as archive:
         names = set(archive.namelist())
         try:
@@ -473,7 +534,7 @@ def verify_direct_scratchpad_jar(jar_path: Path) -> None:
                 'com/sun/cldc/io/j2me/scratchpad/ScratchpadByteArrayInputStream.class')
             http = archive.read('com/sun/cldc/io/j2me/http/Protocol.class')
         except KeyError as exc:
-            raise RuntimeError('Missing v25 ScratchPad zero-copy classes') from exc
+            raise RuntimeError('Missing v41 ScratchPad zero-copy classes') from exc
 
     scratchpad_classes = sorted(
         name for name in names
@@ -514,11 +575,13 @@ def verify_direct_scratchpad_jar(jar_path: Path) -> None:
     if (not has_native or not creates_separate_stream or
             not segment_patch_classes or nested_present or
             legacy or not http_direct or not lifecycle_ok):
-        raise RuntimeError('v25 ScratchPad segment-stream verification failed')
+        raise RuntimeError('v41 ScratchPad segment-stream verification failed')
 
 def write_metadata(project: Path, jam: dict[str, str], app_name: str, app_class: str,
                    app_param: str, rom_code: str, output_stem: str,
-                   scratchpad_crc32: int) -> None:
+                   scratchpad_crc32: int, scratchpad_size: int,
+                   screen_x: int, screen_y: int,
+                   corpse_party_compat: bool) -> None:
     props = [
         ('Manifest-Version', '1.0'),
         ('MIDlet-Name', app_name),
@@ -527,32 +590,37 @@ def write_metadata(project: Path, jam: dict[str, str], app_name: str, app_class:
         ('DoJa-App-Class', app_class),
         ('DoJa-App-Param', app_param),
         ('DoJa-Port-Version', str(PORT_VERSION)),
+        ('DoJa-Compat-Corpse-Party', '1' if corpse_party_compat else '0'),
     ]
     prop_text = ''.join(k + ': ' + v + '\r\n' for k, v in props) + '\r\n'
     internal = re.sub(r'[^A-Za-z0-9]', '', output_stem).upper()[:12] or 'DOJAGAME'
-    legacy_output_stem = re.sub(r'_doja_v25$', '_doja_v24', output_stem)
     header = f'''/* Auto-generated by tools/prepare_doja.py. */
 #ifndef PSTROS_STANDALONE_GAME_H
 #define PSTROS_STANDALONE_GAME_H
 
-#define DOJA_PORT_BUILD_VERSION 25
-#define DOJA_PORT_VERSION_TEXT "v25"
+#define DOJA_PORT_BUILD_VERSION {PORT_VERSION}
+#define DOJA_PORT_VERSION_TEXT "{PORT_TAG}"
 #define STANDALONE_APP_NAME "{c_escape(app_name)}"
 #define STANDALONE_MAIN_CLASS "{c_escape(app_class)}"
 #define DOJA_APP_CLASS "{c_escape(app_class)}"
 #define DOJA_APP_PARAM "{c_escape(app_param)}"
-#define DOJA_SCREEN_Y -24
+#define DOJA_SCREEN_X {screen_x}
+#define DOJA_SCREEN_Y {screen_y}
 #define STANDALONE_CLASSPATH "@embedded"
 #define STANDALONE_JAR_FILENAME "game.jar"
-#define STANDALONE_NDS_GAME_CODE "{rom_code}"
+#define STANDALONE_NDS_GAME_CODE "####"
+#define STANDALONE_APP_STORAGE_CODE "{rom_code}"
 #define STANDALONE_NDS_INTERNAL_TITLE "{internal}"
 #define STANDALONE_OUTPUT_BASENAME "{output_stem}"
-#define STANDALONE_SHORT_SAVE_NAME "{rom_code.upper()}.DJS"
+#define STANDALONE_SHORT_SAVE_NAME "{rom_code.upper()}.SAV"
 #define STANDALONE_SHORT_SAVE_PATH "fat:/" STANDALONE_SHORT_SAVE_NAME
-#define STANDALONE_SAVE_PATH "fat:/" STANDALONE_OUTPUT_BASENAME ".djs"
+#define STANDALONE_SAVE_PATH "fat:/" STANDALONE_OUTPUT_BASENAME ".sav"
 #define STANDALONE_RMS_SAVE_PATH "fat:/" STANDALONE_OUTPUT_BASENAME ".rms"
-#define STANDALONE_LEGACY_SAVE_PATH "fat:/{legacy_output_stem}.djs"
+#define STANDALONE_LEGACY_SAVE_PATH "fat:/{rom_code.upper()}.DJS"
+#define STANDALONE_SAVE_MODE_TEXT "SAV FILE"
+#define DOJA_SCRATCHPAD_SIZE {scratchpad_size}
 #define DOJA_SCRATCHPAD_CRC32 0x{scratchpad_crc32:08X}UL
+#define DOJA_COMPAT_CORPSE_PARTY {1 if corpse_party_compat else 0}
 #define STANDALONE_PROPERTIES_TEXT "{c_escape(prop_text)}"
 
 #endif
@@ -563,7 +631,7 @@ TARGET := {output_stem}
 TEXT1 := {app_name}
 TEXT2 := {PORT_NAME}
 TEXT3 := {app_class}
-NDS_GAME_CODE := {rom_code}
+NDS_GAME_CODE := \\#\\#\\#\\#
 NDS_MAKER_CODE := HB
 NDS_INTERNAL_TITLE := {internal}
 NDS_ICON := assets/standalone_icon.bmp
@@ -580,12 +648,14 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def write_prepared_marker(project: Path, output_stem: str) -> Path:
+def write_prepared_marker(project: Path, output_stem: str, scratchpad_size: int, corpse_party_compat: bool) -> Path:
     marker = project / 'build_doja' / PREPARED_MARKER
     payload = {
         'port_version': PORT_VERSION,
         'port_tag': PORT_TAG,
         'output_stem': output_stem,
+        'scratchpad_size': scratchpad_size,
+        'corpse_party_compat': corpse_party_compat,
         'game_jar_sha256': sha256_file(project / 'embedded' / 'game.jar'),
         'scratchpad_sha256': sha256_file(project / 'embedded' / 'doja_scratchpad.bin'),
         'default_icon_sha256': sha256_file(project / 'assets' / 'default_standalone_icon.bmp'),
@@ -604,9 +674,19 @@ def write_prepared_marker(project: Path, output_stem: str) -> Path:
         'nds_main_source_sha256': sha256_file(project / 'kvm' / 'VmSkel' / 'src' / 'nds_main.c'),
         'nds_file_source_sha256': sha256_file(project / 'kvm' / 'VmSkel' / 'src' / 'Java_nds_File.c'),
         'nds_runtime_source_sha256': sha256_file(project / 'kvm' / 'VmSkel' / 'src' / 'nds_runtime.c'),
+        'video_source_sha256': sha256_file(project / 'kvm' / 'VmSkel' / 'src' / 'Java_nds_Video.c'),
         'machine_md_source_sha256': sha256_file(project / 'kvm' / 'VmSkel' / 'h' / 'machine_md.h'),
         'collector_source_sha256': sha256_file(project / 'kvm' / 'VmCommon' / 'src' / 'collector.c'),
         'doja_canvas_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'Canvas.java'),
+        'doja_graphics_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'Graphics.java'),
+        'doja_image_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'Image.java'),
+        'doja_palette_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'Palette.java'),
+        'doja_paletted_image_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'PalettedImage.java'),
+        'doja_indexed_gif_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'image' / 'IndexedGifDecoder.java'),
+        'doja_jar_inflater_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'util' / 'JarInflater.java'),
+        'doja_graphics3d_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'graphics3d' / 'Graphics3D.java'),
+        'doja_primitive_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'graphics3d' / 'Primitive.java'),
+        'doja_transform_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'util3d' / 'Transform.java'),
         'doja_mainapp_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'MainApp.java'),
         'config_stub_sha256': sha256_file(project / 'tools' / 'compile_stubs' / 'nds' / 'pstros' / 'ConfigData.java'),
         'fontgen_source_sha256': sha256_file(project / 'tools' / 'fontgen.py'),
@@ -630,16 +710,28 @@ def main() -> int:
     parser.add_argument('--rom-code', required=True)
     parser.add_argument('--font')
     parser.add_argument('--name')
+    parser.add_argument('--screen-x', type=int, default=8)
+    parser.add_argument('--screen-y', type=int, default=-24)
     args = parser.parse_args()
 
     project = Path(__file__).resolve().parents[1]
     tool_root = Path(__file__).resolve().parent
+    version_header = (project / 'include' / 'doja_port_version.h').read_text(encoding='ascii')
+    version_match = re.search(r'^#define\s+DOJA_SOURCE_PORT_VERSION\s+(\d+)\s*$', version_header, re.M)
+    tag_match = re.search(r'^#define\s+DOJA_SOURCE_PORT_TAG\s+"([^"]+)"\s*$', version_header, re.M)
+    if not version_match or int(version_match.group(1)) != PORT_VERSION:
+        raise RuntimeError('Source version header does not match prepare_doja.py')
+    if not tag_match or tag_match.group(1) != PORT_TAG:
+        raise RuntimeError('Source version tag does not match prepare_doja.py')
     jar = Path(args.jar).expanduser().resolve()
     jam_path = Path(args.jam).expanduser().resolve()
     sp = Path(args.sp).expanduser().resolve()
     for path in (jar, jam_path, sp):
         if not path.is_file():
             raise FileNotFoundError(path)
+    if not -256 <= args.screen_x <= 256 or not -256 <= args.screen_y <= 256:
+        raise ValueError('Screen offsets must be between -256 and 256.')
+
     rom_code = re.sub(r'[^A-Za-z0-9]', '', args.rom_code).upper()
     if len(rom_code) != 4:
         raise ValueError('ROM code must contain exactly four letters/numbers.')
@@ -648,7 +740,8 @@ def main() -> int:
     app_class = jam.get('AppClass', 'Main').strip() or 'Main'
     app_param = jam.get('AppParam', '0').strip() or '0'
     app_name = (args.name or jar.stem).strip()
-    output_stem = safe_stem(app_name) + '_doja_v25'
+    output_stem = safe_stem(app_name) + '_doja_v41'
+    corpse_party_compat = detect_corpse_party_compat(jar)
     work = project / 'build_doja'
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir()
@@ -668,6 +761,8 @@ def main() -> int:
     print('[DoJa] App class :', app_class)
     print('[DoJa] App param :', app_param)
     print('[DoJa] Profile   :', jam.get('ProfileVer', 'unknown'))
+    print('[DoJa] Viewport  : native 240x240 at X=%d Y=%d (no fit)' % (args.screen_x, args.screen_y))
+    print('[DoJa] Compat    :', 'Corpse Party exact-signature patch' if corpse_party_compat else 'generic game')
     normalized_sp, _sp_mode = normalize_scratchpad(sp, jam, work / 'scratchpad_payload.bin')
     class_dir = compile_compat(project, tool_root, work)
     font_bin = work / 'jpfont.bin'
@@ -701,6 +796,7 @@ def main() -> int:
     print('[DoJa] Native SP :', native_sp, native_sp.stat().st_size, 'bytes')
     print('[DoJa] Native SP backup:', native_sp_backup, native_sp_backup.stat().st_size, 'bytes')
     verify_cp932_jar(project / 'embedded' / 'game.jar')
+    verify_doja_v41_api(project / 'embedded' / 'game.jar')
     verify_offline_jar(project / 'embedded' / 'game.jar')
     verify_direct_scratchpad_jar(project / 'embedded' / 'game.jar')
     # Keep the inherited native audio object linkable. DoJa audio is intentionally
@@ -710,13 +806,15 @@ def main() -> int:
     import zlib
     scratchpad_crc32 = zlib.crc32(native_payload) & 0xFFFFFFFF
     print('[DoJa] SP CRC32  : %08X' % scratchpad_crc32)
-    write_metadata(project, jam, app_name, app_class, app_param, rom_code, output_stem, scratchpad_crc32)
-    prepared_marker = write_prepared_marker(project, output_stem)
+    write_metadata(project, jam, app_name, app_class, app_param, rom_code,
+                   output_stem, scratchpad_crc32, len(native_payload),
+                   args.screen_x, args.screen_y, corpse_party_compat)
+    prepared_marker = write_prepared_marker(project, output_stem, len(native_payload), corpse_party_compat)
     print('[DoJa] Port version:', PORT_NAME)
     print('[DoJa] Output ROM  :', output_stem + '.nds')
     print('[DoJa] Marker      :', prepared_marker)
     print('[OK] Prepared embedded/game.jar')
-    print('[OK] Prepared embedded/doja_scratchpad.bin (v25 boot-safe direct DLDI save + default icon + full CP932/SJIS + input + zero-copy + 2432 KiB heap)')
+    print('[OK] Prepared embedded/doja_scratchpad.bin (v41 same-name SAV file + legacy DJS import + default icon + full CP932/SJIS + Latin fix + native viewport/no fit + generic game metadata + input + zero-copy + DS 2432 KiB / DSi 8192 KiB heap)')
     print('[OK] Prepared build_doja/doja_scratchpad.bin (automatic restore backup)')
     print('[NEXT] Run build.bat')
     return 0

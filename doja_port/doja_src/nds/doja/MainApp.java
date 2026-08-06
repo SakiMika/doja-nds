@@ -14,6 +14,7 @@ public final class MainApp {
     public static void main(String[] args) {
         String className = "Main";
         String appParam = "0";
+        int screenX = 8;
         int screenY = -24;
         int i;
 
@@ -23,6 +24,8 @@ public final class MainApp {
                 className = arg.substring(2);
             } else if (arg.startsWith("-P")) {
                 appParam = arg.substring(2);
+            } else if (arg.startsWith("-X")) {
+                screenX = Integer.parseInt(arg.substring(2));
             } else if (arg.startsWith("-Y")) {
                 screenY = Integer.parseInt(arg.substring(2));
             }
@@ -30,7 +33,7 @@ public final class MainApp {
 
         javax.microedition.lcdui.Display.WIDTH = 240;
         javax.microedition.lcdui.Display.HEIGHT = 240;
-        EmuCanvas.screenPosX = 8;
+        EmuCanvas.screenPosX = screenX;
         EmuCanvas.screenPosY = screenY;
 
         EmuCanvas.keyA = javax.microedition.lcdui.Display.keyFire;
@@ -49,20 +52,18 @@ public final class MainApp {
          * game-action mode for this standalone DoJa branch.
          */
         ConfigData.configActive = false;
-        System.out.println("DoJa input mapping: MIDP actions + negative-code fallback");
 
         startInputPump();
 
         try {
+            System.gc();
             Class appClass = Class.forName(className);
             IApplication app = (IApplication) appClass.newInstance();
             IApplication._bind(app, new String[] { appParam }, "http://localhost/");
-            System.out.println("DoJa NDS v25: DIRECT DLDI SAVE");
-            System.out.println("microedition.encoding=SJIS");
-            System.out.println("DoJa NDS: start");
             app.start();
         } catch (Throwable error) {
             System.out.println("DoJa boot error:");
+            System.out.println(error.toString());
             error.printStackTrace();
         }
     }
@@ -76,8 +77,6 @@ public final class MainApp {
         new Thread("doja-input") {
             public void run() {
                 EmuCanvas canvas = EmuCanvas.getInstance();
-                System.out.println("DoJa NDS: input pump started");
-
                 while (!terminateRequested) {
                     try {
                         /*

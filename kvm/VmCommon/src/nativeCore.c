@@ -229,10 +229,8 @@ void Java_java_lang_Class_forName(void)
                     }
                     if (iclass->status == CLASS_RAW) {
                         /* Load the class; this may throw exceptions */
-                        printf("Class.forName load begin: %s\n", className);
                         loadedReflectively = TRUE;
                         loadClassfile(iclass, TRUE);
-                        printf("Class.forName load done: %s status=%d\n", className, iclass->status);
                     }
                     /* The specification does not require that the current
                      * class have "access" to thisClass */
@@ -240,9 +238,7 @@ void Java_java_lang_Class_forName(void)
 
                     if (!CLASS_INITIALIZED(iclass)) {
                         /* Initialize the class; this may push another frame */
-                        printf("Class.forName init begin: %s\n", className);
                         initializeClass(iclass);
-                        printf("Class.forName init scheduled: %s\n", className);
                     }
                 } else {
                     topStackAsType(CLASS) = thisClass;
@@ -578,7 +574,6 @@ void Java_com_sun_cldc_io_Waiter_waitForIO(void)
 
 void Java_java_lang_Thread_start(void)
 {
-    printf("Thread.start native enter\n");
     START_TEMPORARY_ROOTS
         DECLARE_TEMPORARY_ROOT(JAVATHREAD, javaThread,
                                popStackAsType(JAVATHREAD));
@@ -600,12 +595,10 @@ void Java_java_lang_Thread_start(void)
                          target->ofClass);
 
         if (thisMethod == NULL) {
-            printf("Thread.start run method null\n");
             raiseException("java/lang/Error");
             goto done;
         }
 
-        printf("Thread.start init behavior\n");
         /* May call pushFrame(), which can cause GC */
         initThreadBehavior(VMthread, thisMethod, (OBJECT)target);
 
@@ -614,10 +607,8 @@ void Java_java_lang_Thread_start(void)
         *(INSTANCE *)&VMthread->stack->cells[0] = target;
 
         /* Make the thread alive, and tell it that it can run */
-        printf("Thread.start start/resume\n");
         startThread(VMthread);
         resumeThread(VMthread);
-        printf("Thread.start done\n");
  done:
     END_TEMPORARY_ROOTS
 }

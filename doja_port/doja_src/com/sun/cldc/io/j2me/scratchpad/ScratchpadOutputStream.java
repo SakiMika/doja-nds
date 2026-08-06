@@ -5,7 +5,7 @@ import java.io.OutputStream;
 
 /**
  * Sparse overlay writer backed by the native persistent ScratchPad save.
- * The native layer writes an atomic sparse .sav file when this stream closes.
+ * The native layer buffers immediately and writes a sparse .sav file when storage is available.
  */
 final class ScratchpadOutputStream extends OutputStream {
     private int position;

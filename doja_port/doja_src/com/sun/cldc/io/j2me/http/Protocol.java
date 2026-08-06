@@ -11,11 +11,10 @@ import javax.microedition.io.Connection;
 /**
  * DoJa standalone HTTP bridge.
  *
- * Corpse Party's bootstrap asks for init.bin and numbered chunks.  Those
- * bytes already live in the embedded ScratchPad.  v14 reads them through the
- * same native absolute-offset flat scratchpad Protocol used by scratchpad:/// URLs.
- * It never opens doja/scratchpad.bin as a ResourceInputStream, eliminating
- * the reopen/rescan loop seen in v8-v11.
+ * Network access is unavailable on this standalone NDS target. The one
+ * legacy offline downloader bridge is enabled only when prepare_doja.py
+ * detects the exact supported Corpse Party signature. Other games are never
+ * redirected into another title's ScratchPad layout.
  */
 public final class Protocol implements ConnectionBaseInterface, HttpConnection {
     private static final int DATA_OFFSET = 8192;
@@ -41,6 +40,10 @@ public final class Protocol implements ConnectionBaseInterface, HttpConnection {
 
     public InputStream openInputStream() throws IOException {
         ensureOpen();
+
+        if (!corpsePartyCompatEnabled()) {
+            throw new IOException("HTTP unavailable on standalone NDS");
+        }
 
         String file = finalPathPart(target);
         if ("init.bin".equals(file)) {
@@ -83,6 +86,10 @@ public final class Protocol implements ConnectionBaseInterface, HttpConnection {
         if (closed) {
             throw new IOException("closed");
         }
+    }
+
+    private static boolean corpsePartyCompatEnabled() {
+        return "1".equals(System.getProperty("DoJa-Compat-Corpse-Party"));
     }
 
     private static String finalPathPart(String value) {

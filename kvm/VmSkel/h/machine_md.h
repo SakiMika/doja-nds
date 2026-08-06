@@ -11,10 +11,9 @@
 #include <setjmp.h>
 
 //Torlus
-/* DoJa v25: Corpse Party reaches a 230416-byte allocation after the
- * ScratchPad loading phase.  With the old 2 MiB heap there is enough total
- * free memory but no sufficiently large contiguous block.  Give the VM an
- * extra 384 KiB of contiguous headroom while keeping compaction disabled. */
+/* DoJa v41: shared standalone heap budget for large DoJa titles.
+ * Keep compaction disabled because this KVM branch is built around stable
+ * native pointers into embedded resources. */
 #define DEFAULTHEAPSIZE (2432*1024)
 #define JAR_FILES_USE_STDIO 0
 

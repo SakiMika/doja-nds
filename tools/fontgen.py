@@ -165,9 +165,10 @@ def _glyph_bits(font: ImageFont.FreeTypeFont, char: str, width: int, height: int
     glyph_h = max(1, y1 - y0)
     draw.text((2 - x0, 2 - y0), char, fill=255, font=font)
     crop = temp.crop((2, 2, min(48, 2 + glyph_w), min(48, 2 + glyph_h)))
-    # Store every glyph in a full-width cell. The runtime samples every
-    # second source column for ASCII to produce a half-width advance.
-    target_w = width
+    # Store Latin/ASCII in a real half-width source cell. The old build
+    # rendered it across all 12 columns and then sampled every second column
+    # at runtime; thin vertical strokes could disappear completely.
+    target_w = (width + 1) // 2 if ord(char) <= 0x007F else width
     scale = min(target_w / max(1, crop.width), height / max(1, crop.height))
     resized_w = max(1, min(target_w, int(crop.width * scale + 0.5)))
     resized_h = max(1, min(height, int(crop.height * scale + 0.5)))
@@ -179,9 +180,10 @@ def _glyph_bits(font: ImageFont.FreeTypeFont, char: str, width: int, height: int
 
     bits = bytearray((width * height + 7) // 8)
     pixels = cell.load()
+    threshold = 80 if ord(char) <= 0x007F else 96
     for y in range(height):
         for x in range(width):
-            if pixels[x, y] >= 96:
+            if pixels[x, y] >= threshold:
                 bit = y * width + x
                 bits[bit >> 3] |= 0x80 >> (bit & 7)
     return bytes(bits)

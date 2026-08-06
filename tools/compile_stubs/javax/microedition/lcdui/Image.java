@@ -6,4 +6,5 @@ public class Image {
     public Graphics getGraphics() { return null; }
     public int getWidth() { return 0; }
     public int getHeight() { return 0; }
+    public void getRGB(int[] rgb,int offset,int scanlength,int x,int y,int width,int height) {}
 }
