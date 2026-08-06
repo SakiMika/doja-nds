@@ -11,8 +11,8 @@ from pathlib import Path
 
 from segment_stream_patch import segment_stream_patch_counts
 
-PORT_VERSION = 41
-MARKER_NAME = 'prepared_v41.ok'
+PORT_VERSION = 42
+MARKER_NAME = 'prepared_v42.ok'
 
 
 def sha256_file(path: Path) -> str:
@@ -82,15 +82,15 @@ def main() -> int:
         return fail('Source version tag does not match verifier.')
     marker_path = project / 'build_doja' / MARKER_NAME
     if not marker_path.is_file():
-        return fail('Missing v41 preparation marker. Run build_doja.bat.')
+        return fail('Missing v42 preparation marker. Run build_doja.bat.')
     try:
         marker = json.loads(marker_path.read_text(encoding='utf-8'))
     except Exception as exc:
         return fail('Invalid preparation marker: ' + str(exc))
-    if marker.get('port_version') != PORT_VERSION or marker.get('port_tag') != 'v41':
-        return fail('Preparation marker is not for v41.')
+    if marker.get('port_version') != PORT_VERSION or marker.get('port_tag') != 'v42':
+        return fail('Preparation marker is not for v42.')
     output_stem = marker.get('output_stem', '')
-    if not output_stem.endswith('_doja_v41'):
+    if not output_stem.endswith('_doja_v42'):
         return fail('Output name is stale: ' + repr(output_stem))
     checks = {
         'game_jar_sha256': project / 'embedded' / 'game.jar',
@@ -127,6 +127,8 @@ def main() -> int:
         'config_stub_sha256': project / 'tools' / 'compile_stubs' / 'nds' / 'pstros' / 'ConfigData.java',
         'fontgen_source_sha256': project / 'tools' / 'fontgen.py',
         'bitmap_font_source_sha256': project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'font' / 'BitmapJapaneseFont.java',
+        'fast_path_source_sha256': project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'FastPath.java',
+        'fast_blit_source_sha256': project / 'doja_port' / 'doja_src' / 'nds' / 'pstros' / 'video' / 'DoJaFastBlit.java',
         'property_source_sha256': project / 'kvm' / 'VmCommon' / 'src' / 'property.c',
         'cp932gen_source_sha256': project / 'tools' / 'cp932gen.py',
         'cp932_codec_source_sha256': project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'encoding' / 'Cp932Codec.java',
@@ -147,10 +149,13 @@ def main() -> int:
         return fail('ScratchPad size does not match the preparation marker.')
     mk = (project / 'standalone_game.mk').read_text(encoding='utf-8')
     header = (project / 'include' / 'standalone_game.h').read_text(encoding='utf-8')
-    if 'TARGET := ' + output_stem not in mk or 'TEXT2 := DoJa NDS Port v41' not in mk:
-        return fail('standalone_game.mk is not v41.')
-    if '#define DOJA_PORT_BUILD_VERSION 41' not in header:
-        return fail('standalone_game.h is not v41.')
+    app_match = re.search(r'^#define DOJA_APP_CLASS "([^"]+)"\s*$', header, re.M)
+    app_class = app_match.group(1) if app_match else ''
+    game_jar = project / 'embedded' / 'game.jar'
+    if 'TARGET := ' + output_stem not in mk or 'TEXT2 := DoJa NDS Port v42' not in mk:
+        return fail('standalone_game.mk is not v42.')
+    if '#define DOJA_PORT_BUILD_VERSION 42' not in header:
+        return fail('standalone_game.h is not v42.')
     size_match = re.search(r'^#define DOJA_SCRATCHPAD_SIZE (\d+)\s*$', header, re.M)
     if not size_match or int(size_match.group(1)) != scratchpad_size:
         return fail('Generated ScratchPad size metadata is missing or stale.')
@@ -161,7 +166,7 @@ def main() -> int:
             or 'STANDALONE_SHORT_SAVE_PATH' not in header
             or 'STANDALONE_SAVE_MODE_TEXT "SAV FILE"' not in header
             or '#define DOJA_COMPAT_CORPSE_PARTY ' not in header):
-        return fail('v41 game-independent display/save metadata is missing.')
+        return fail('v42 game-independent display/save metadata is missing.')
     with zipfile.ZipFile(project / 'embedded' / 'game.jar', 'r') as archive:
         manifest = archive.read('META-INF/MANIFEST.MF')
         names = set(archive.namelist())
@@ -204,8 +209,10 @@ def main() -> int:
             archive.read('com/nttdocomo/util/JarInflater$BitReader.class')
             archive.read('com/nttdocomo/util/JarInflater$Huffman.class')
             archive.read('nds/doja/image/IndexedGifDecoder.class')
+            fast_path_class = archive.read('nds/doja/FastPath.class')
+            fast_blit_class = archive.read('nds/pstros/video/DoJaFastBlit.class')
         except KeyError as exc:
-            return fail('Missing v41 runtime class/resource: ' + str(exc))
+            return fail('Missing v42 runtime class/resource: ' + str(exc))
         if len(jpfont) < 12 or jpfont[:4] != b'DJF1':
             return fail('Japanese font resource is missing or invalid.')
         font_width, font_height, glyph_count, bytes_per_glyph = struct.unpack('>HHHH', jpfont[4:12])
@@ -232,7 +239,7 @@ def main() -> int:
         if b'setEntry' not in doja_palette:
             return fail('Palette.class is stale.')
         if not all(token in doja_graphics for token in (b'Graphics3D', b'setFlipMode', b'getPixels', b'setPixels')):
-            return fail('Graphics.class lacks the v41 image/3D API.')
+            return fail('Graphics.class lacks the v42 image/3D API.')
         if not all(token in doja_graphics3d for token in (b'renderObject3D', b'setPerspectiveView', b'setTransform')):
             return fail('Graphics3D.class is stale.')
         if not all(token in doja_primitive for token in (b'getVertexArray', b'getTextureCoordArray', b'setTexture')):
@@ -252,7 +259,7 @@ def main() -> int:
             if name.startswith('com/sun/cldc/io/j2me/scratchpad/')
             and name.endswith('.class')]
         if any('$' in name for name in scratchpad_classes):
-            return fail('Nested ScratchPad classes are forbidden in v41.')
+            return fail('Nested ScratchPad classes are forbidden in v42.')
         if b'doja/scratchpad.bin' in protocol or b'ResourceInputStream' in protocol:
             return fail('ScratchPad Protocol.class is stale.')
         if b'nativeFlush' not in output_stream:
@@ -265,7 +272,7 @@ def main() -> int:
                     b'nativeWrite', b'nativeWriteBytes', b'nativeFlush', b'openRange',
                     b'ScratchpadInputStream', b'sizeUnchecked')
         if not all(token in protocol for token in required):
-            return fail('v41 separate-stream ScratchPad methods are missing.')
+            return fail('v42 separate-stream ScratchPad methods are missing.')
         if (b'DoJa-Compat-Corpse-Party' not in http
                 or b'HTTP unavailable on standalone NDS' not in http):
             return fail('HTTP compatibility gate is missing or stale.')
@@ -320,7 +327,7 @@ def main() -> int:
             'MEDIA: NOT ATTACHED' not in nds_main_source or
             'MODE: RAM-FIRST SAVE' not in nds_main_source or
             'GAME: CONTINUES IN RAM' not in nds_main_source):
-        return fail('v41 RAM-first save diagnostics are missing or stale.')
+        return fail('v42 RAM-first save diagnostics are missing or stale.')
 
     if 'extends InputStream' in protocol_source:
         return fail('Protocol source still doubles as InputStream.')
@@ -340,7 +347,7 @@ def main() -> int:
             or 'STAGE: %s' not in nds_main_source
             or 'pstrosSetVmConsoleEnabled(1)' not in nds_main_source
             or '#include "doja_port_version.h"' not in nds_main_source):
-        return fail('NDS entry point is not the v41 compact save-status build.')
+        return fail('NDS entry point is not the v42 compact save-status build.')
     if ('pstrosMountSaveStorageAuto(launchPath)' not in nds_main_source or
             'argc > 0 && argv != NULL' not in nds_main_source or
             'dojaSpPersistenceInit' not in nds_main_source or
@@ -350,16 +357,16 @@ def main() -> int:
             'fatInitDefault()' in nds_main_source):
         return fail('NDS entry point is not using dynamic viewport/save metadata.')
     if '#define DEFAULTHEAPSIZE (2432*1024)' not in machine_md_source:
-        return fail('DS fallback heap is not 2432 KiB for v41.')
+        return fail('DS fallback heap is not 2432 KiB for v42.')
     if ('#define DOJA_DSI_HEAPSIZE (8*1024*1024)' not in nds_main_source or
             'dojaHeapBytes = isDSiMode() ? DOJA_DSI_HEAPSIZE : DEFAULTHEAPSIZE' not in nds_main_source or
             'RequestedHeapSize = dojaHeapBytes' not in nds_main_source):
-        return fail('v41 dynamic DS/DSi heap selection is missing.')
-    if 'DoJa v41 heap allocated:' not in nds_runtime_source:
-        return fail('v41 heap allocation diagnostics are missing.')
-    if ('DoJa v41 heap fallback:' not in nds_runtime_source or
+        return fail('v42 dynamic DS/DSi heap selection is missing.')
+    if 'DoJa v42 heap allocated:' not in nds_runtime_source:
+        return fail('v42 heap allocation diagnostics are missing.')
+    if ('DoJa v42 heap fallback:' not in nds_runtime_source or
             'attempt -= 1024 * 1024' not in nds_runtime_source):
-        return fail('v41 DSi heap fallback ladder is missing.')
+        return fail('v42 DSi heap fallback ladder is missing.')
     if 'KVM HEAP OOM req=' not in collector_source:
         return fail('Heap fragmentation diagnostics are missing.')
     save_mount_tokens = (
@@ -407,9 +414,9 @@ def main() -> int:
         'case -7: return KEY_SOFT2',
     )
     if input_tokens[0] not in doja_mainapp_source or not all(token in doja_canvas_source for token in input_tokens[1:]):
-        return fail('DoJa v41 input mapping fix is missing or stale.')
+        return fail('DoJa v42 input mapping fix is missing or stale.')
     if 'DoJa boot error:' not in doja_mainapp_source or 'error.toString()' not in doja_mainapp_source:
-        return fail('DoJa v41 fatal Java diagnostics are missing.')
+        return fail('DoJa v42 fatal Java diagnostics are missing.')
     forbidden_success_logs = (
         'DoJa boot class:',
         'DoJa boot: class loaded',
@@ -418,7 +425,7 @@ def main() -> int:
         'DoJa NDS: input pump started',
     )
     if any(token in doja_mainapp_source for token in forbidden_success_logs):
-        return fail('DoJa v41 production runtime still prints successful boot/input traces.')
+        return fail('DoJa v42 production runtime still prints successful boot/input traces.')
     display_tokens = (
         'Display.WIDTH = 240',
         'Display.HEIGHT = 240',
@@ -426,10 +433,10 @@ def main() -> int:
         'EmuCanvas.screenPosY = screenY',
     )
     if not all(token in doja_mainapp_source for token in display_tokens):
-        return fail('DoJa v41 native viewport setup is missing or stale.')
+        return fail('DoJa v42 native viewport setup is missing or stale.')
     video_source = (project / 'kvm' / 'VmSkel' / 'src' / 'Java_nds_Video.c').read_text(encoding='latin-1')
-    if 'DoJa v41 native viewport: never resample the game frame.' not in video_source:
-        return fail('DoJa v41 native viewport blitter marker is missing.')
+    if 'DoJa v42 native viewport: never resample the game frame.' not in video_source:
+        return fail('DoJa v42 native viewport blitter marker is missing.')
     forbidden_scaler_tokens = (
         'srcW == 240 && srcH == 240 && dstW == 256 && dstH == 192',
         'int sourceY = ((outY * 5) + 2) >> 2',
@@ -449,9 +456,9 @@ def main() -> int:
         'presentOwner();',
     )
     if not all(token in graphics_source for token in frame_tokens):
-        return fail('v41 deferred single-present frame path is missing or stale.')
+        return fail('v42 deferred single-present frame path is missing or stale.')
     if 'owner._flush();' not in graphics_source:
-        return fail('v41 frame presenter is not connected to the Canvas owner.')
+        return fail('v42 frame presenter is not connected to the Canvas owner.')
 
     jar_inflater_source = (project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'util' / 'JarInflater.java').read_text(encoding='utf-8')
     inflater_tokens = (
@@ -462,7 +469,7 @@ def main() -> int:
         'new byte[8192]',
     )
     if not all(token in jar_inflater_source for token in inflater_tokens):
-        return fail('v41 ScratchPad JAR loading optimizations are missing or stale.')
+        return fail('v42 ScratchPad JAR loading optimizations are missing or stale.')
 
     quiet_sources = (
         doja_canvas_source,
@@ -472,7 +479,7 @@ def main() -> int:
     )
     forbidden_hot_logs = ('DOJA SENT', 'Thread.start native enter', 'jar entry search', 'open class result:')
     if any(token in source for source in quiet_sources for token in forbidden_hot_logs):
-        return fail('v41 still contains a hot-path class/thread/input console trace.')
+        return fail('v42 still contains a hot-path class/thread/input console trace.')
     key_source = (project / 'kvm' / 'VmSkel' / 'src' / 'Java_nds_Key.c').read_text(encoding='utf-8')
     if 'POLL n=' in key_source or 'RAW n=' in key_source:
         return fail('Temporary input diagnostics are still enabled.')
@@ -502,7 +509,7 @@ def main() -> int:
     if "find('〓')" not in bitmap_font_source:
         return fail('Japanese font fallback is missing or stale.')
     if 'FONT MISS U+' in bitmap_font_source or 'DoJa font ready:' in bitmap_font_source:
-        return fail('Per-glyph/font-load console diagnostics must be disabled in v41.')
+        return fail('Per-glyph/font-load console diagnostics must be disabled in v42.')
     if 'Cp932Codec.normalizeForDisplay' not in bitmap_font_source:
         return fail('Bitmap font is not using the SJIS display fallback.')
     latin_font_tokens = (
@@ -518,15 +525,15 @@ def main() -> int:
     if not all(token in bitmap_font_source for token in runtime_latin_tokens):
         return fail('Latin glyph renderer still skips source columns.')
     if 'NFTR' in fontgen_source or 'nftr' in fontgen_source:
-        return fail('NFTR hybrid font support must not be enabled in v41.')
+        return fail('NFTR hybrid font support must not be enabled in v42.')
     nul_padding_tokens = (
         'isNonPrintingControl',
         'return c < 0x0020 || c == 0x007F',
     )
     if not all(token in bitmap_font_source for token in nul_padding_tokens):
-        return fail('v41 NUL/control padding font fix is missing or stale.')
+        return fail('v42 NUL/control padding font fix is missing or stale.')
     if b'isNonPrintingControl' not in bitmap_font_class:
-        return fail('Compiled BitmapJapaneseFont.class lacks the v41 padding fix.')
+        return fail('Compiled BitmapJapaneseFont.class lacks the v42 padding fix.')
 
     property_source = (project / 'kvm' / 'VmCommon' / 'src' / 'property.c').read_text(encoding='latin-1')
     cp932_codec_source = (project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'encoding' / 'Cp932Codec.java').read_text(encoding='utf-8')
@@ -543,11 +550,11 @@ def main() -> int:
     if ('dojaSpStorageUnavailable' not in resource_source or
             'never mount/probe storage from a single-byte write' not in resource_source or
             'dojaSaveUiBuffered' not in resource_source):
-        return fail('v41 RAM-first ScratchPad hot-path fix is missing.')
+        return fail('v42 RAM-first ScratchPad hot-path fix is missing.')
     if 'if (!dojaSpPersistenceReady) dojaSpEnsurePersistence();' in resource_source:
         return fail('ScratchPad writes still probe storage from the hot path.')
     save_tokens = (
-        'DoJa v41 ScratchPad ROM access with persistent same-name .sav saves',
+        'DoJa v42 ScratchPad ROM access with persistent same-name .sav saves',
         'dojaSpPersistenceInit',
         'dojaSpPersistenceFlush',
         'dojaSpEnsurePersistence',
@@ -564,7 +571,7 @@ def main() -> int:
         'dojaSpWriteOverlayFile',
     )
     if not all(token in resource_source for token in save_tokens):
-        return fail('v41 game-independent persistent ScratchPad backend is missing or stale.')
+        return fail('v42 game-independent persistent ScratchPad backend is missing or stale.')
     if 'DOJA_CP_' in resource_source or 'dojaSpDetectSlot' in resource_source:
         return fail('Corpse Party-specific save-slot logic is still hardcoded in the runtime.')
     if 'fsync(fileno' in resource_source:
@@ -582,7 +589,31 @@ def main() -> int:
     loader = (project / 'kvm' / 'VmExtra' / 'src' / 'loaderFile.c').read_bytes()
     if b'doja/scratchpad.bin' in loader:
         return fail('Native source still contains the legacy ScratchPad resource bridge.')
-    print('[OK] DoJa v41 preparation verified')
+
+    # v42 performance-specific source and bytecode validation.
+    doja_canvas_perf = (project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'Canvas.java').read_text(encoding='utf-8')
+    doja_image_perf = (project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'Image.java').read_text(encoding='utf-8')
+    doja_font_perf = (project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'font' / 'BitmapJapaneseFont.java').read_text(encoding='utf-8')
+    make_perf = (project / 'Makefile').read_text(encoding='utf-8')
+    if 'FastPath.present(screenImage)' not in doja_canvas_perf:
+        return fail('v42 direct framebuffer present is missing.')
+    if b'drawRegionAlpha' not in fast_path_class or b'Video' not in fast_blit_class:
+        return fail('v42 compiled FF4A fast bridge is missing or stale.')
+    if '_baseDisplayImage' not in doja_image_perf or 'transparentEnabled) effectDirty' not in doja_image_perf:
+        return fail('v42 native global-alpha Java path is missing.')
+    if 'STRING_CACHE_SIZE = 24' not in doja_font_perf or 'cachedString' not in doja_font_perf:
+        return fail('v42 whole-string Japanese font cache is missing.')
+    if 'HOT_ARM_OBJECTS' not in make_perf or '-marm -O3' not in make_perf:
+        return fail('v42 ARM/O3 hotspot build is missing.')
+    if app_class == 'FF4A':
+        with zipfile.ZipFile(game_jar, 'r') as archive:
+            m_class = archive.read('m.class')
+        if bytes.fromhex('10 4b 70 9a 00 06 b8 01 fb') in m_class:
+            return fail('FF4A periodic System.gc call remains active.')
+        if bytes.fromhex('10 1e 70 9a 00 08 03 04 b8 02 43') in m_class:
+            return fail('FF4A periodic PhoneSystem call remains active.')
+
+    print('[OK] DoJa v42 preparation verified')
     print('[OK] Expected ROM:', output_stem + '.nds')
     return 0
 

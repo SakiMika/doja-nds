@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 REQUIRED = [
-    b"DoJa v41",
+    b"DoJa v42",
     b"MODE: RAM-FIRST SAVE",
     b"GAME: CONTINUES IN RAM",
     b"BOOT: %s",

@@ -3,7 +3,7 @@
 # Supports current libnds/Calico/libdvm and older split libfat layouts
 # without requiring project-specific devkitPro paths.
 
-TARGET       := unprepared_doja_v41
+TARGET       := unprepared_doja_v42
 BUILD        := build
 SOURCES      := source
 INCLUDES     := include \
@@ -102,7 +102,7 @@ vpath %.c $(SOURCES)
 
 all: check $(TARGET).nds
 
-# v41 safety net: make can restore the separately linked ScratchPad from the
+# v42 safety net: make can restore the separately linked ScratchPad from the
 # preparation backup.  This prevents a stale game.jar from being built after
 # users extract a newer source package over an older working directory.
 restore-native-scratchpad:
@@ -117,9 +117,9 @@ check: restore-native-scratchpad
 	@echo "DEVKITARM=$(DEVKITARM)"
 	@echo "FAT header=$(if $(FAT_INC),$(FAT_INC)/fat.h,NOT FOUND)"
 	@echo "FAT library=$(if $(FAT_LIB),$(FAT_LIB)/libfat.a,NOT FOUND)"
-	@echo "[CHECK] DoJa port version: v41"
+	@echo "[CHECK] DoJa port version: v42"
 	@test -f include/doja_port_version.h || (echo "Missing source version header"; exit 1)
-	@grep -q "^#define DOJA_SOURCE_PORT_VERSION 41$$" include/doja_port_version.h || (echo "Wrong source version header; expected v41"; exit 1)
+	@grep -q "^#define DOJA_SOURCE_PORT_VERSION 42$$" include/doja_port_version.h || (echo "Wrong source version header; expected v42"; exit 1)
 	@grep -q "DOJA_PORT_BUILD_VERSION != DOJA_SOURCE_PORT_VERSION" kvm/VmSkel/src/nds_main.c || (echo "Stale NDS metadata version guard"; exit 1)
 	@echo "[CHECK] Connector platform: j2me"
 	@echo "[CHECK] Encoding: microedition.encoding=SJIS; CP932 decode/encode; full font"
@@ -129,9 +129,9 @@ check: restore-native-scratchpad
 	@test -n "$(FAT_LIB)" || (echo "Missing libfat.a. Checked $(LIBNDS_LIB) and $(DEVKITPRO)/libfat/lib"; echo "Install/update with: pacman -Syu --needed nds-dev"; exit 1)
 	@test -f "$(CALICO)/share/ds9.specs" || (echo "Missing Calico ARM9 specs: $(CALICO)/share/ds9.specs"; exit 1)
 	@test -f "$(ARM7_ELF)" || (echo "Missing default ARM7 binary: $(ARM7_ELF)"; exit 1)
-	@test -f "build_doja/prepared_v41.ok" || (echo "Missing v41 preparation marker. Run build_doja.bat"; exit 1)
-	@grep -q '^TARGET := .*_doja_v41$$' standalone_game.mk || (echo "Wrong/stale standalone_game.mk; expected v41"; exit 1)
-	@grep -q '^#define DOJA_PORT_BUILD_VERSION 41$$' include/standalone_game.h || (echo "Wrong/stale standalone_game.h; expected v41"; exit 1)
+	@test -f "build_doja/prepared_v42.ok" || (echo "Missing v42 preparation marker. Run build_doja.bat"; exit 1)
+	@grep -q '^TARGET := .*_doja_v42$$' standalone_game.mk || (echo "Wrong/stale standalone_game.mk; expected v42"; exit 1)
+	@grep -q '^#define DOJA_PORT_BUILD_VERSION 42$$' include/standalone_game.h || (echo "Wrong/stale standalone_game.h; expected v42"; exit 1)
 
 	@grep -Fq 'NDS_GAME_CODE := \#\#\#\#' standalone_game.mk || (echo "ROM header must use homebrew game code #### for DLDI patching"; exit 1)
 	@grep -Fq '#define STANDALONE_NDS_GAME_CODE "####"' include/standalone_game.h || (echo "Generated NDS header code is not homebrew-safe"; exit 1)
@@ -140,70 +140,70 @@ check: restore-native-scratchpad
 	@test -f "$(EMBEDDED_JAR)" || (echo "Missing embedded JAR: $(EMBEDDED_JAR)"; exit 1)
 	@test -f "$(EMBEDDED_AUDIO)" || (echo "Missing native PCM pack: $(EMBEDDED_AUDIO)"; exit 1)
 	@test -f "$(EMBEDDED_SCRATCHPAD)" || (echo "Missing native ScratchPad: $(EMBEDDED_SCRATCHPAD)"; exit 1)
-	@grep -q '#define DOJA_LATE_NATIVE_BIND 1' kvm/VmCommon/src/native.c || (echo "Missing v41 ROMIZING late-native bridge"; exit 1)
+	@grep -q '#define DOJA_LATE_NATIVE_BIND 1' kvm/VmCommon/src/native.c || (echo "Missing v42 ROMIZING late-native bridge"; exit 1)
 	@grep -q 'getDoJaLateNativeFunction(clazz, methodName, methodSignature)' kvm/VmCommon/src/native.c || (echo "Late-native bridge is not called by getNativeFunction"; exit 1)
 	@grep -q 'scratchpad_Protocol_nativeReadBytes' kvm/VmSkel/src/nativeFunctionTableGBA.c || (echo "Missing non-ROMIZING ScratchPad native table"; exit 1)
-	@grep -q 'DoJa v41 ScratchPad ROM access with persistent same-name .sav saves' kvm/VmExtra/src/resource.c || (echo "Missing v41 ScratchPad backend"; exit 1)
-	@grep -q 'dojaSpPersistenceFlush' kvm/VmExtra/src/resource.c || (echo "Missing v41 persistent save flush"; exit 1)
-	@grep -q 'dojaSpEnsurePersistence' kvm/VmExtra/src/resource.c || (echo "Missing v41 lazy storage retry"; exit 1)
-	@grep -q 'dojaSpStorageUnavailable' kvm/VmExtra/src/resource.c || (echo "Missing v41 storage-failure latch"; exit 1)
+	@grep -q 'DoJa v42 ScratchPad ROM access with persistent same-name .sav saves' kvm/VmExtra/src/resource.c || (echo "Missing v42 ScratchPad backend"; exit 1)
+	@grep -q 'dojaSpPersistenceFlush' kvm/VmExtra/src/resource.c || (echo "Missing v42 persistent save flush"; exit 1)
+	@grep -q 'dojaSpEnsurePersistence' kvm/VmExtra/src/resource.c || (echo "Missing v42 lazy storage retry"; exit 1)
+	@grep -q 'dojaSpStorageUnavailable' kvm/VmExtra/src/resource.c || (echo "Missing v42 storage-failure latch"; exit 1)
 	@grep -q 'never mount/probe storage from a single-byte write' kvm/VmExtra/src/resource.c || (echo "ScratchPad byte writes still touch storage"; exit 1)
 	@grep -q 'pstrosSaveProbeLocked' kvm/VmSkel/src/Java_nds_File.c || (echo "Missing one-shot media probe latch"; exit 1)
 	@grep -q 'dojaSaveUiBuffered' kvm/VmExtra/src/resource.c || (echo "Missing RAM-buffer UI state"; exit 1)
-	@grep -q 'dojaSaveUiResult' kvm/VmExtra/src/resource.c || (echo "Missing v41 save-result status"; exit 1)
-	@grep -q 'dojaSpCopyFile' kvm/VmExtra/src/resource.c || (echo "Missing v41 libfat fallback"; exit 1)
+	@grep -q 'dojaSaveUiResult' kvm/VmExtra/src/resource.c || (echo "Missing v42 save-result status"; exit 1)
+	@grep -q 'dojaSpCopyFile' kvm/VmExtra/src/resource.c || (echo "Missing v42 libfat fallback"; exit 1)
 	@! grep -q 'fsync(fileno' kvm/VmExtra/src/resource.c || (echo "Unsupported fsync call still present"; exit 1)
-	@grep -q 'memcpy(dojaSpTempPath + length - 4, ".TMP", 5)' kvm/VmExtra/src/resource.c || (echo "Missing v41 .TMP save path"; exit 1)
-	@grep -q 'DOJA_SP_MAX_DIRTY_CHUNKS 256' kvm/VmExtra/src/resource.c || (echo "Missing generic v41 ScratchPad overlay capacity"; exit 1)
+	@grep -q 'memcpy(dojaSpTempPath + length - 4, ".TMP", 5)' kvm/VmExtra/src/resource.c || (echo "Missing v42 .TMP save path"; exit 1)
+	@grep -q 'DOJA_SP_MAX_DIRTY_CHUNKS 256' kvm/VmExtra/src/resource.c || (echo "Missing generic v42 ScratchPad overlay capacity"; exit 1)
 	@! grep -q 'DOJA_CP_' kvm/VmExtra/src/resource.c || (echo "Game-specific Corpse Party save constants must not be hardcoded"; exit 1)
 	@! grep -q 'dojaSpDetectSlot' kvm/VmExtra/src/resource.c || (echo "Game-specific save-slot detector must not be hardcoded"; exit 1)
 	@grep -q 'Protocol.nativeFlush()' doja_port/doja_src/com/sun/cldc/io/j2me/scratchpad/ScratchpadOutputStream.java || (echo "Output stream does not flush save"; exit 1)
 	@test -f assets/default_standalone_icon.bmp || (echo "Missing bundled default icon"; exit 1)
-	@test -f doja_port/doja_src/com/sun/cldc/io/j2me/scratchpad/ScratchpadInputStream.java || (echo "Missing v41 separate ScratchpadInputStream source"; exit 1)
-	@test -f doja_port/doja_src/com/sun/cldc/io/j2me/scratchpad/SegmentToken.java || (echo "Missing v41 SegmentToken source"; exit 1)
-	@test -f doja_port/doja_src/com/sun/cldc/io/j2me/scratchpad/ScratchpadByteArrayInputStream.java || (echo "Missing v41 zero-copy segment stream source"; exit 1)
-	@test -f tools/segment_stream_patch.py || (echo "Missing v41 j.class segment patcher"; exit 1)
-	@grep -q 'KVM HEAP OOM req=' kvm/VmCommon/src/collector.c || (echo "Missing v41 heap OOM diagnostics"; exit 1)
-	@grep -q '^#define DEFAULTHEAPSIZE (2432\*1024)$$' kvm/VmSkel/h/machine_md.h || (echo "Wrong v41 Java heap size; expected 2432 KiB"; exit 1)
-	@grep -q 'DoJa v41 heap allocated:' kvm/VmSkel/src/nds_runtime.c || (echo "Missing v41 heap allocation diagnostics"; exit 1)
-	@grep -q 'DoJa v41 heap fallback:' kvm/VmSkel/src/nds_runtime.c || (echo "Missing v41 DSi heap fallback"; exit 1)
-	@grep -Fq '#define DOJA_DSI_HEAPSIZE (8*1024*1024)' kvm/VmSkel/src/nds_main.c || (echo "Missing v41 8 MiB DSi heap"; exit 1)
-	@grep -Fq 'dojaHeapBytes = isDSiMode() ? DOJA_DSI_HEAPSIZE : DEFAULTHEAPSIZE' kvm/VmSkel/src/nds_main.c || (echo "Missing v41 dynamic heap selection"; exit 1)
-	@grep -q 'pstrosSetVmConsoleEnabled(1)' kvm/VmSkel/src/nds_main.c || (echo "Missing v41 visible VM boot console"; exit 1)
-	@grep -q 'ConfigData.configActive = false' doja_port/doja_src/nds/doja/MainApp.java || (echo "Missing v41 MIDP action-mode input fix"; exit 1)
-	@grep -q 'case -2: return KEY_DOWN' doja_port/doja_src/com/nttdocomo/ui/Canvas.java || (echo "Missing v41 negative-key fallback mapping"; exit 1)
-	@test -f doja_port/doja_src/com/nttdocomo/ui/PalettedImage.java || (echo "Missing v41 PalettedImage API"; exit 1)
-	@test -f doja_port/doja_src/com/nttdocomo/ui/Palette.java || (echo "Missing v41 Palette API"; exit 1)
+	@test -f doja_port/doja_src/com/sun/cldc/io/j2me/scratchpad/ScratchpadInputStream.java || (echo "Missing v42 separate ScratchpadInputStream source"; exit 1)
+	@test -f doja_port/doja_src/com/sun/cldc/io/j2me/scratchpad/SegmentToken.java || (echo "Missing v42 SegmentToken source"; exit 1)
+	@test -f doja_port/doja_src/com/sun/cldc/io/j2me/scratchpad/ScratchpadByteArrayInputStream.java || (echo "Missing v42 zero-copy segment stream source"; exit 1)
+	@test -f tools/segment_stream_patch.py || (echo "Missing v42 j.class segment patcher"; exit 1)
+	@grep -q 'KVM HEAP OOM req=' kvm/VmCommon/src/collector.c || (echo "Missing v42 heap OOM diagnostics"; exit 1)
+	@grep -q '^#define DEFAULTHEAPSIZE (2432\*1024)$$' kvm/VmSkel/h/machine_md.h || (echo "Wrong v42 Java heap size; expected 2432 KiB"; exit 1)
+	@grep -q 'DoJa v42 heap allocated:' kvm/VmSkel/src/nds_runtime.c || (echo "Missing v42 heap allocation diagnostics"; exit 1)
+	@grep -q 'DoJa v42 heap fallback:' kvm/VmSkel/src/nds_runtime.c || (echo "Missing v42 DSi heap fallback"; exit 1)
+	@grep -Fq '#define DOJA_DSI_HEAPSIZE (8*1024*1024)' kvm/VmSkel/src/nds_main.c || (echo "Missing v42 8 MiB DSi heap"; exit 1)
+	@grep -Fq 'dojaHeapBytes = isDSiMode() ? DOJA_DSI_HEAPSIZE : DEFAULTHEAPSIZE' kvm/VmSkel/src/nds_main.c || (echo "Missing v42 dynamic heap selection"; exit 1)
+	@grep -q 'pstrosSetVmConsoleEnabled(1)' kvm/VmSkel/src/nds_main.c || (echo "Missing v42 visible VM boot console"; exit 1)
+	@grep -q 'ConfigData.configActive = false' doja_port/doja_src/nds/doja/MainApp.java || (echo "Missing v42 MIDP action-mode input fix"; exit 1)
+	@grep -q 'case -2: return KEY_DOWN' doja_port/doja_src/com/nttdocomo/ui/Canvas.java || (echo "Missing v42 negative-key fallback mapping"; exit 1)
+	@test -f doja_port/doja_src/com/nttdocomo/ui/PalettedImage.java || (echo "Missing v42 PalettedImage API"; exit 1)
+	@test -f doja_port/doja_src/com/nttdocomo/ui/Palette.java || (echo "Missing v42 Palette API"; exit 1)
 	@grep -q 'implements Graphics3D' doja_port/doja_src/com/nttdocomo/ui/Graphics.java || (echo "Graphics does not expose the DoJa Graphics3D interface"; exit 1)
-	@test -f doja_port/doja_src/com/nttdocomo/ui/graphics3d/Primitive.java || (echo "Missing v41 graphics3d compatibility classes"; exit 1)
-	@test -f doja_port/doja_src/com/nttdocomo/util/JarInflater.java || (echo "Missing v41 ScratchPad JAR inflater"; exit 1)
-	@grep -q 'class RawInflater' doja_port/doja_src/com/nttdocomo/util/JarInflater.java || (echo "Missing v41 raw-DEFLATE support"; exit 1)
-	@grep -q 'def full_cp932_repertoire()' tools/fontgen.py || (echo "Missing v41 full CP932 font + SJIS decode generator"; exit 1)
-	@grep -q 'chars.update(full_cp932_repertoire())' tools/fontgen.py || (echo "v41 CP932 repertoire is not enabled"; exit 1)
+	@test -f doja_port/doja_src/com/nttdocomo/ui/graphics3d/Primitive.java || (echo "Missing v42 graphics3d compatibility classes"; exit 1)
+	@test -f doja_port/doja_src/com/nttdocomo/util/JarInflater.java || (echo "Missing v42 ScratchPad JAR inflater"; exit 1)
+	@grep -q 'class RawInflater' doja_port/doja_src/com/nttdocomo/util/JarInflater.java || (echo "Missing v42 raw-DEFLATE support"; exit 1)
+	@grep -q 'def full_cp932_repertoire()' tools/fontgen.py || (echo "Missing v42 full CP932 font + SJIS decode generator"; exit 1)
+	@grep -q 'chars.update(full_cp932_repertoire())' tools/fontgen.py || (echo "v42 CP932 repertoire is not enabled"; exit 1)
 	@grep -q 'value = "SJIS";' kvm/VmCommon/src/property.c || (echo "microedition.encoding is not SJIS"; exit 1)
-	@test -f tools/cp932gen.py || (echo "Missing v41 CP932 table generator"; exit 1)
-	@test -f doja_port/doja_src/nds/doja/encoding/Cp932Codec.java || (echo "Missing v41 CP932 codec"; exit 1)
-	@test -f doja_port/doja_src/com/sun/cldc/i18n/j2me/SJIS_Reader.java || (echo "Missing v41 SJIS reader"; exit 1)
-	@test -f doja_port/doja_src/com/sun/cldc/i18n/j2me/SJIS_Writer.java || (echo "Missing v41 SJIS writer"; exit 1)
-	@grep -q 'Cp932Codec.normalizeForDisplay' doja_port/doja_src/nds/doja/font/BitmapJapaneseFont.java || (echo "Missing v41 raw-SJIS display fallback"; exit 1)
-	@grep -q 'isNonPrintingControl' doja_port/doja_src/nds/doja/font/BitmapJapaneseFont.java || (echo "Missing v41 NUL/control padding suppression"; exit 1)
-	@grep -q 'return c < 0x0020 || c == 0x007F' doja_port/doja_src/nds/doja/font/BitmapJapaneseFont.java || (echo "v41 control padding predicate is stale"; exit 1)
-	@grep -Fq 'target_w = (width + 1) // 2 if ord(char) <= 0x007F else width' tools/fontgen.py || (echo "Missing v41 Latin half-cell font generation"; exit 1)
-	@grep -Fq 'int sourceWidth = c <= 0x007F ? (baseWidth + 1) / 2 : baseWidth' doja_port/doja_src/nds/doja/font/BitmapJapaneseFont.java || (echo "Missing v41 Latin continuous-source renderer"; exit 1)
-	@! grep -qi 'nftr' tools/fontgen.py || (echo "NFTR hybrid font must remain disabled in v41"; exit 1)
-	@grep -q 'EmuCanvas.screenPosX = screenX' doja_port/doja_src/nds/doja/MainApp.java || (echo "Missing v41 dynamic native viewport X"; exit 1)
-	@grep -q 'EmuCanvas.screenPosY = screenY' doja_port/doja_src/nds/doja/MainApp.java || (echo "Missing v41 dynamic native viewport Y"; exit 1)
-	@grep -q 'DoJa v41 native viewport: never resample the game frame.' kvm/VmSkel/src/Java_nds_Video.c || (echo "Missing v41 native viewport blitter"; exit 1)
-	@grep -q 'private boolean presentPending' doja_port/doja_src/com/nttdocomo/ui/Graphics.java || (echo "Missing v41 deferred frame presenter"; exit 1)
-	@grep -q 'if (lockDepth == 0 && presentPending)' doja_port/doja_src/com/nttdocomo/ui/Graphics.java || (echo "v41 unlock does not publish one complete frame"; exit 1)
-	@grep -q 'if (lockDepth > 0)' doja_port/doja_src/com/nttdocomo/ui/Graphics.java || (echo "v41 flushBuffer still presents partial locked frames"; exit 1)
+	@test -f tools/cp932gen.py || (echo "Missing v42 CP932 table generator"; exit 1)
+	@test -f doja_port/doja_src/nds/doja/encoding/Cp932Codec.java || (echo "Missing v42 CP932 codec"; exit 1)
+	@test -f doja_port/doja_src/com/sun/cldc/i18n/j2me/SJIS_Reader.java || (echo "Missing v42 SJIS reader"; exit 1)
+	@test -f doja_port/doja_src/com/sun/cldc/i18n/j2me/SJIS_Writer.java || (echo "Missing v42 SJIS writer"; exit 1)
+	@grep -q 'Cp932Codec.normalizeForDisplay' doja_port/doja_src/nds/doja/font/BitmapJapaneseFont.java || (echo "Missing v42 raw-SJIS display fallback"; exit 1)
+	@grep -q 'isNonPrintingControl' doja_port/doja_src/nds/doja/font/BitmapJapaneseFont.java || (echo "Missing v42 NUL/control padding suppression"; exit 1)
+	@grep -q 'return c < 0x0020 || c == 0x007F' doja_port/doja_src/nds/doja/font/BitmapJapaneseFont.java || (echo "v42 control padding predicate is stale"; exit 1)
+	@grep -Fq 'target_w = (width + 1) // 2 if ord(char) <= 0x007F else width' tools/fontgen.py || (echo "Missing v42 Latin half-cell font generation"; exit 1)
+	@grep -Fq 'int sourceWidth = c <= 0x007F ? (baseWidth + 1) / 2 : baseWidth' doja_port/doja_src/nds/doja/font/BitmapJapaneseFont.java || (echo "Missing v42 Latin continuous-source renderer"; exit 1)
+	@! grep -qi 'nftr' tools/fontgen.py || (echo "NFTR hybrid font must remain disabled in v42"; exit 1)
+	@grep -q 'EmuCanvas.screenPosX = screenX' doja_port/doja_src/nds/doja/MainApp.java || (echo "Missing v42 dynamic native viewport X"; exit 1)
+	@grep -q 'EmuCanvas.screenPosY = screenY' doja_port/doja_src/nds/doja/MainApp.java || (echo "Missing v42 dynamic native viewport Y"; exit 1)
+	@grep -q 'DoJa v42 native viewport: never resample the game frame.' kvm/VmSkel/src/Java_nds_Video.c || (echo "Missing v42 native viewport blitter"; exit 1)
+	@grep -q 'private boolean presentPending' doja_port/doja_src/com/nttdocomo/ui/Graphics.java || (echo "Missing v42 deferred frame presenter"; exit 1)
+	@grep -q 'if (lockDepth == 0 && presentPending)' doja_port/doja_src/com/nttdocomo/ui/Graphics.java || (echo "v42 unlock does not publish one complete frame"; exit 1)
+	@grep -q 'if (lockDepth > 0)' doja_port/doja_src/com/nttdocomo/ui/Graphics.java || (echo "v42 flushBuffer still presents partial locked frames"; exit 1)
 	@grep -q 'FIXED_LITERAL' doja_port/doja_src/com/nttdocomo/util/JarInflater.java || (echo "Missing cached fixed DEFLATE tree"; exit 1)
 	@grep -q 'copyMatch(byte\[\] output' doja_port/doja_src/com/nttdocomo/util/JarInflater.java || (echo "Missing fast DEFLATE match copy"; exit 1)
 	@! grep -q 'DOJA SENT' doja_port/doja_src/com/nttdocomo/ui/Canvas.java || (echo "DoJa input debug spam is still enabled"; exit 1)
 	@! grep -q 'Thread.start native enter' kvm/VmCommon/src/nativeCore.c || (echo "Thread debug spam is still enabled"; exit 1)
 	@! grep -q 'jar entry search' kvm/VmExtra/src/jar.c || (echo "JAR loader debug spam is still enabled"; exit 1)
-	@! grep -q 'DoJa boot: app created' doja_port/doja_src/nds/doja/MainApp.java || (echo "Successful boot traces must be disabled in v41"; exit 1)
-	@! grep -q 'FONT MISS U+' doja_port/doja_src/nds/doja/font/BitmapJapaneseFont.java || (echo "Per-glyph font traces must be disabled in v41"; exit 1)
+	@! grep -q 'DoJa boot: app created' doja_port/doja_src/nds/doja/MainApp.java || (echo "Successful boot traces must be disabled in v42"; exit 1)
+	@! grep -q 'FONT MISS U+' doja_port/doja_src/nds/doja/font/BitmapJapaneseFont.java || (echo "Per-glyph font traces must be disabled in v42"; exit 1)
 	@! grep -Fq 'srcW == 240 && srcH == 240 && dstW == 256 && dstH == 192' kvm/VmSkel/src/Java_nds_Video.c || (echo "Forced 240x240 to 256x192 scaler must be removed"; exit 1)
 	@! grep -Fq 'goto blit_done;' kvm/VmSkel/src/Java_nds_Video.c || (echo "Stale forced-scaler epilogue jump remains"; exit 1)
 	@! grep -q '^blit_done:' kvm/VmSkel/src/Java_nds_Video.c || (echo "Stale forced-scaler epilogue label remains"; exit 1)
@@ -212,9 +212,9 @@ check: restore-native-scratchpad
 	@grep -q 'StartJVM(5, kvm_argv)' kvm/VmSkel/src/nds_main.c || (echo "JVM is not receiving both viewport offsets"; exit 1)
 	@grep -Eq '^#define DOJA_SCRATCHPAD_SIZE [1-9][0-9]*$$' include/standalone_game.h || (echo "Missing dynamic ScratchPad size metadata"; exit 1)
 	@grep -q 'DoJa-Compat-Corpse-Party' doja_port/doja_src/com/sun/cldc/io/j2me/http/Protocol.java || (echo "Missing opt-in legacy compatibility gate"; exit 1)
-	@grep -q -- '-DENABLE_HEAP_COMPACTION=0' Makefile || (echo "v41 requires heap compaction disabled"; exit 1)
+	@grep -q -- '-DENABLE_HEAP_COMPACTION=0' Makefile || (echo "v42 requires heap compaction disabled"; exit 1)
 	@grep -q 'return new ScratchpadInputStream' doja_port/doja_src/com/sun/cldc/io/j2me/scratchpad/Protocol.java || (echo "Protocol still returns itself as InputStream"; exit 1)
-	@! grep -q 'extends InputStream' doja_port/doja_src/com/sun/cldc/io/j2me/scratchpad/Protocol.java || (echo "Protocol must not extend InputStream in v41"; exit 1)
+	@! grep -q 'extends InputStream' doja_port/doja_src/com/sun/cldc/io/j2me/scratchpad/Protocol.java || (echo "Protocol must not extend InputStream in v42"; exit 1)
 	@test -f "$(NDS_ICON)" || (echo "Missing generated NDS icon: $(NDS_ICON)"; echo "Run build.bat to prepare it from the JAR"; exit 1)
 	@test -f "include/standalone_game.h" || (echo "Missing generated game config: include/standalone_game.h"; echo "Run build.bat"; exit 1)
 	@grep -Fq 'static int pstrosConfigureSaveStorageOn(const char *volume, const char *backend)' kvm/VmSkel/src/Java_nds_File.c || (echo "Missing multi-backend save probe"; exit 1)
@@ -229,20 +229,25 @@ check: restore-native-scratchpad
 	@! grep -q 'fatMountSimple(' kvm/VmSkel/src/Java_nds_File.c || (echo "Manual private-interface mounts must not be used"; exit 1)
 	@grep -q 'fopen(probePath, "wb")' kvm/VmSkel/src/Java_nds_File.c || (echo "Writable stdio save probe is missing"; exit 1)
 
-	@grep -q 'STANDALONE_SHORT_SAVE_NAME' kvm/VmSkel/src/Java_nds_File.c || (echo "Missing v41 SAV fallback path"; exit 1)
+	@grep -q 'STANDALONE_SHORT_SAVE_NAME' kvm/VmSkel/src/Java_nds_File.c || (echo "Missing v42 SAV fallback path"; exit 1)
 	@grep -q 'pstrosRememberLaunchSavePath' kvm/VmSkel/src/Java_nds_File.c || (echo "Missing same-name SAV path derivation"; exit 1)
 	@grep -q 'pstrosChooseFinalSavePath' kvm/VmSkel/src/Java_nds_File.c || (echo "Missing same-name SAV path selection"; exit 1)
 	@grep -q 'MODE: RAM-FIRST SAVE' kvm/VmSkel/src/nds_main.c || (echo "Missing RAM-first save status"; exit 1)
 	@grep -q 'SAVE: READY' kvm/VmSkel/src/nds_main.c || (echo "Missing compact save status UI"; exit 1)
-	@grep -q 'pstrosSetVmConsoleEnabled(1)' kvm/VmSkel/src/nds_main.c || (echo "v41 VM boot console is not enabled"; exit 1)
+	@grep -q 'pstrosSetVmConsoleEnabled(1)' kvm/VmSkel/src/nds_main.c || (echo "v42 VM boot console is not enabled"; exit 1)
 	@! grep -q 'POLL n=' kvm/VmSkel/src/Java_nds_Key.c || (echo "Input debug spam is still enabled"; exit 1)
 	@grep -q 'pstrosMountSaveStorageAuto(launchPath)' kvm/VmSkel/src/nds_main.c || (echo "NDS entry point is not using argv-aware save mount"; exit 1)
 	@grep -q 'MEDIA: %s' kvm/VmSkel/src/nds_main.c || (echo "Save backend status is missing"; exit 1)
 	@grep -q 'STAGE: %s' kvm/VmSkel/src/nds_main.c || (echo "Save mount-stage status is missing"; exit 1)
 	@! grep -q 'fatInitDefault()' kvm/VmSkel/src/nds_main.c || (echo "Storage initialization must remain inside the save backend"; exit 1)
-	@grep -q 'STANDALONE_RMS_SAVE_PATH' kvm/VmSkel/src/Java_nds_File.c || (echo "Missing v41 separate RMS path"; exit 1)
+	@grep -q 'STANDALONE_RMS_SAVE_PATH' kvm/VmSkel/src/Java_nds_File.c || (echo "Missing v42 separate RMS path"; exit 1)
 	@grep -q '^const char \*pstrosGetSavePath(void)' kvm/VmSkel/src/Java_nds_File.c || (echo "Missing pstrosGetSavePath implementation"; exit 1)
 	@grep -q '^int pstrosGetSaveErrno(void)' kvm/VmSkel/src/Java_nds_File.c || (echo "Missing pstrosGetSaveErrno implementation"; exit 1)
+	@grep -q 'FastPath.present(screenImage)' doja_port/doja_src/com/nttdocomo/ui/Canvas.java || (echo "Missing v42 direct framebuffer present"; exit 1)
+	@grep -q 'globalAlphaMode' kvm/VmSkel/src/Java_nds_Video.c || (echo "Missing v42 native global-alpha blitter"; exit 1)
+	@grep -q 'STRING_CACHE_SIZE = 24' doja_port/doja_src/nds/doja/font/BitmapJapaneseFont.java || (echo "Missing v42 FF4A text cache"; exit 1)
+	@grep -q '_FF4A_PERIODIC_GC' tools/prepare_doja.py || (echo "Missing v42 FF4A hot-loop patch"; exit 1)
+	@grep -q 'HOT_ARM_OBJECTS' Makefile || (echo "Missing v42 ARM/O3 hotspot build"; exit 1)
 	@command -v $(NDSTOOL) >/dev/null 2>&1 || (echo "Missing ndstool in PATH"; exit 1)
 
 # This target is intentionally verbose so last_build.log shows every resolved
@@ -299,6 +304,13 @@ $(BUILD)/embedded_osnd_native_pcm.o: $(EMBEDDED_AUDIO) | $(BUILD)
 $(BUILD)/$(TARGET).elf: $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
 
+
+# v42 FF4A performance build: keep the rest of KVM compact Thumb code, but
+# compile the bytecode dispatch/cache and framebuffer blitter as ARM/O3.
+HOT_ARM_OBJECTS := $(BUILD)/vmcommon_08_interpret.o $(BUILD)/vmcommon_09_execute.o \
+                   $(BUILD)/vmcommon_01_cache.o $(BUILD)/vmskel_17_Java_nds_Video.o
+$(HOT_ARM_OBJECTS): CFLAGS := $(filter-out -mthumb -O2,$(CFLAGS)) -marm -O3 -fomit-frame-pointer
+
 # printf.c implements the redirected functions, so do not apply the call macros
 # while compiling that one translation unit.
 $(BUILD)/vmskel_05_printf.o: CFLAGS += -DKVM_STDIO_IMPLEMENTATION=1
@@ -310,4 +322,4 @@ $(BUILD):
 	mkdir -p $@
 
 clean:
-	rm -rf $(BUILD) *_doja_v*.nds unprepared_doja_v41.nds
+	rm -rf $(BUILD) *_doja_v*.nds unprepared_doja_v42.nds

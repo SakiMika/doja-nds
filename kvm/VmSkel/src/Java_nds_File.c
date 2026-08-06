@@ -417,13 +417,13 @@ static void pstrosMakeEmptyRms(unsigned char *data) {
 }
 
 /*
- * DoJa v41 same-name .sav storage selection.
+ * DoJa v42 same-name .sav storage selection.
  *
  * The v27-v30 backends called legacy private device getters directly. Those
  * symbols are not exported by the current Calico/libdvm stack, so the final
  * link failed even though every C file compiled.
  *
- * v41 keeps the supported libfat compatibility entry point fatInitDefault().
+ * v42 keeps the supported libfat compatibility entry point fatInitDefault().
  * On libnds 2.x this delegates to libdvm, initializes the block-device layer,
  * and mounts DLDI as fat:/ plus DSi SD as sd:/ when available.  We first probe
  * any volume already registered by the launcher, then initialize libdvm once,
@@ -439,7 +439,7 @@ static int pstrosSaveStage = 0;
 static int pstrosSaveConfigured = 0;
 static int pstrosPreferredBackend = 0; /* 1=DLDI/fat, 2=DSi-SD/sd */
 static int pstrosFatInitAttempted = 0;
-/* v41: one complete mount attempt per boot. A missing melonDS SD/DLDI
+/* v42: one complete mount attempt per boot. A missing melonDS SD/DLDI
  * device must not be probed again for every ScratchPad byte written. */
 static int pstrosSaveProbeLocked = 0;
 
@@ -693,7 +693,7 @@ int pstrosMountSaveStorageAuto(const char *launchPath) {
     return 0;
 }
 
-/* v41 deliberately does not re-probe after the complete boot-time attempt.
+/* v42 deliberately does not re-probe after the complete boot-time attempt.
  * Some i-appli write ScratchPad one byte at a time during startup.
  * Re-running fopen/fatInit probes from that hot path made melonDS
  * appear frozen whenever no DLDI/SD image was attached. */

@@ -3,7 +3,7 @@ setlocal EnableExtensions DisableDelayedExpansion
 cd /d "%~dp0"
 
 echo ================================================
-echo   DoJa i-appli to Nintendo DS - Native Viewport + Multi-Game v41
+echo   DoJa i-appli to Nintendo DS - Native Viewport + Multi-Game v42
 echo ================================================
 echo.
 set /p "DOJA_JAR=Duong dan file JAR: "
@@ -29,13 +29,13 @@ if not defined PYEXE (
 
 rem Never build generated files or ROMs left by any older DoJa revision.
 del /q "*_doja_v*.nds" 2>nul
-del /q "unprepared_doja_v41.nds" 2>nul
+del /q "unprepared_doja_v42.nds" 2>nul
 del /q "embedded\game.jar" 2>nul
 del /q "embedded\doja_scratchpad.bin" 2>nul
 del /q "assets\standalone_icon.bmp" 2>nul
 del /q "standalone_game.mk" 2>nul
 del /q "include\standalone_game.h" 2>nul
-del /q "build_doja\prepared_v41.ok" 2>nul
+del /q "build_doja\prepared_v42.ok" 2>nul
 del /q "build_doja\doja_scratchpad.bin" 2>nul
 
 if defined DOJA_FONT (
@@ -54,7 +54,7 @@ if not "%ERR%"=="0" (
 %PYEXE% %PYARGS% tools\verify_prepared.py --project "."
 set "ERR=%ERRORLEVEL%"
 if not "%ERR%"=="0" (
-    echo [ERROR] Source/JAR/metadata khong dong bo v41. Khong build.
+    echo [ERROR] Source/JAR/metadata khong dong bo v42. Khong build.
     pause
     exit /b %ERR%
 )

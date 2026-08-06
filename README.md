@@ -1,52 +1,19 @@
-# DoJa NDS Port v41 — giảm chớp hình và tăng tốc tải
+# DoJa NDS Port v42 — FF4A performance build
 
-v41 tiếp tục giữ hai nguyên tắc:
+v42 keeps native 240×240 rendering (X=8, Y=-24) and multi-game preparation,
+but adds an exact-signature optimization path for Final Fantasy IV The After.
 
-1. **Không ép fit** khung DoJa 240×240 sang 256×192.
-2. **Không khóa theo một game**; khi đổi JAR/JAM/SP, lớp chính, ScratchPad và tên save đều được sinh lại.
+## FF4A optimizations
 
-## Lỗi đã quan sát ở v40
+- Directly presents the completed DoJa framebuffer; removes the extra repaint/copy.
+- Global image alpha is blended in native ARM code; fades no longer rebuild ARGB images.
+- Caches complete Japanese labels, reducing per-glyph Java scaling and drawRGB calls.
+- Removes FF4A's forced full GC every 75 frames and redundant phone attribute call.
+- Compiles the KVM interpreter/cache/video hot objects as ARM `-O3`.
+- Opaque image rows use `memcpy`.
 
-FF4A đã vào được màn hình tiêu đề, nhưng:
+The bytecode patch only runs when `AppClass=FF4A` and both exact `m.class`
+signatures match. Other games remain unchanged.
 
-- tải tài nguyên lâu;
-- màn hình dưới liên tục cuộn log `DOJA SENT`, `Thread.start...`, tìm class/JAR;
-- khung hình có thể chớp vì `flushBuffer()` đưa từng trạng thái trung gian lên màn hình dù game vẫn đang ở trong `Graphics.lock()`.
-
-## Thay đổi v41
-
-- `Graphics.flushBuffer()` chỉ đánh dấu frame đang chờ khi còn nằm trong `lock()`.
-- Chỉ trình bày **một frame hoàn chỉnh** khi `unlock()` ngoài cùng kết thúc.
-- Loại bỏ log nóng khỏi đường input, tạo thread, tìm class và đọc JAR.
-- Tắt các log thành công khi boot, nạp font và CP932; lỗi nghiêm trọng vẫn được in.
-- Tái sử dụng cây Huffman cố định của DEFLATE thay vì dựng lại ở mỗi block.
-- Sao chép chuỗi LZ bằng `System.arraycopy()` theo khối thay vì từng byte.
-- Tăng bộ đệm đọc JAR từ 2 KiB lên 8 KiB.
-- Giữ API `Palette`, `PalettedImage`, `graphics3d`, SJIS/CP932 và RAM-first save của v40.
-
-## Hiển thị nguyên tỉ lệ
-
-Game vẫn chạy trong hệ tọa độ 240×240, mặc định:
-
-```text
-X = 8
-Y = -24
-```
-
-NDS hiển thị vùng giữa 240×192 bằng pixel nguyên bản; không kéo ngang và không nén dọc.
-
-## Chuẩn bị game khác
-
-Chạy `build_doja.bat`, chọn JAR, JAM và SP, sau đó nhập mã lưu bốn ký tự. Công cụ xóa metadata game cũ trước khi tạo bộ mới.
-
-## FF4A prepared
-
-```text
-AppClass: FF4A
-AppParam: 131 0
-ScratchPad: 778240 bytes
-Viewport: 240x240 at X=8, Y=-24
-Expected ROM: final_fantasy_iv_the_after_doja_v41.nds
-```
-
-Nên thử bằng melonDS ở DSi mode. v41 chưa được boot trực tiếp trong môi trường đóng gói này vì không có devkitARM, ndstool và melonDS.
+Run `build_doja.bat`, select JAR/JAM/SP, then run `build.bat`.
+Use melonDS DSi mode for FF4A. The build still does not stretch 240×240 to 256×192.

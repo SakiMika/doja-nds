@@ -4,6 +4,7 @@ public class Graphics {
     public void translate(int x, int y) {}
     public int getTranslateX() { return 0; }
     public int getTranslateY() { return 0; }
+    public nds.pstros.video.NDSGraphics emuGetGraphics() { return null; }
     public void setClip(int x,int y,int w,int h) {}
     public void clipRect(int x,int y,int w,int h) {}
     public void setColor(int rgb) {}

@@ -53,7 +53,7 @@ int xstrcmp(const char *s1, const char *s2) {
 
 
 /*
- * DoJa v41 late native binding.
+ * DoJa v42 late native binding.
  *
  * This NDS target uses ROMIZING=1 for the CLDC core.  The stock KVM only
  * searches nativeImplementations when ROMIZING=0, because native methods in

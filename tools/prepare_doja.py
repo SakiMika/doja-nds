@@ -17,10 +17,10 @@ from fontgen import generate_font
 from cp932gen import generate_cp932_table
 from segment_stream_patch import patch_segment_streams, segment_stream_patch_counts
 
-PORT_VERSION = 41
-PORT_TAG = "v41"
-PORT_NAME = "DoJa NDS Port v41"
-PREPARED_MARKER = "prepared_v41.ok"
+PORT_VERSION = 42
+PORT_TAG = "v42"
+PORT_NAME = "DoJa NDS Port v42"
+PREPARED_MARKER = "prepared_v42.ok"
 
 
 def parse_jam(path: Path) -> dict[str, str]:
@@ -150,6 +150,39 @@ _CP_LOADING_PROGRESS = bytes.fromhex(
 _CP_LOADING_PROGRESS_PATCHED = bytes.fromhex(
     'b2 02 8f 11 10 00 68 10 0a 00 6c'
 )
+
+# Final Fantasy IV The After: exact frame-loop signatures. These edits keep
+# bytecode length/branch targets unchanged, but remove two handset-era costs:
+# a forced full GC every 75 frames and a redundant PhoneSystem attribute call
+# every 30 frames. Unknown games/classes are never modified.
+_FF4A_PERIODIC_GC = bytes.fromhex('10 4b 70 9a 00 06 b8 01 fb')
+_FF4A_PERIODIC_GC_PATCHED = bytes.fromhex('10 4b 70 9a 00 06 00 00 00')
+_FF4A_PERIODIC_PHONE = bytes.fromhex('10 1e 70 9a 00 08 03 04 b8 02 43')
+_FF4A_PERIODIC_PHONE_PATCHED = bytes.fromhex('10 1e 70 9a 00 08 00 00 00 00 00')
+
+def patch_ff4a_performance(name: str, payload: bytes, app_class: str) -> tuple[bytes, list[str]]:
+    normalized = name.replace('\\', '/')
+    if app_class != 'FF4A' or normalized != 'm.class':
+        return payload, []
+    data = payload
+    tags: list[str] = []
+    gc_count = data.count(_FF4A_PERIODIC_GC)
+    phone_count = data.count(_FF4A_PERIODIC_PHONE)
+    if gc_count == 1:
+        data = data.replace(_FF4A_PERIODIC_GC, _FF4A_PERIODIC_GC_PATCHED, 1)
+        tags.append('ff4a-periodic-full-gc-removed')
+    elif data.count(_FF4A_PERIODIC_GC_PATCHED) == 1:
+        tags.append('ff4a-periodic-full-gc-already-removed')
+    else:
+        raise RuntimeError('FF4A periodic GC signature changed/ambiguous')
+    if phone_count == 1:
+        data = data.replace(_FF4A_PERIODIC_PHONE, _FF4A_PERIODIC_PHONE_PATCHED, 1)
+        tags.append('ff4a-periodic-phone-attribute-removed')
+    elif data.count(_FF4A_PERIODIC_PHONE_PATCHED) == 1:
+        tags.append('ff4a-periodic-phone-attribute-already-removed')
+    else:
+        raise RuntimeError('FF4A periodic PhoneSystem signature changed/ambiguous')
+    return data, tags
 
 
 def patch_game_for_offline_boot(name: str, payload: bytes) -> tuple[bytes, list[str]]:
@@ -316,7 +349,8 @@ def merge_jar(original: Path, class_dir: Path, font_bin: Path, cp932_bin: Path,
         'MicroEdition-Configuration: CLDC-1.0\r\n'
         'MicroEdition-Profile: DoJa-3.5\r\n'
         'DoJa-App-Class: ' + app_class + '\r\n'
-        'DoJa-Port-Version: ' + str(PORT_VERSION) + '\r\n\r\n'
+        'DoJa-Port-Version: ' + str(PORT_VERSION) + '\r\n'
+        'DoJa-FF4A-Optimized: ' + ('1' if app_class == 'FF4A' else '0') + '\r\n\r\n'
     ).encode('utf-8')
     with zipfile.ZipFile(original, 'r') as source, zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED, 9) as dest:
         written: set[str] = set()
@@ -327,6 +361,8 @@ def merge_jar(original: Path, class_dir: Path, font_bin: Path, cp932_bin: Path,
                 continue
             game_payload = source.read(info.filename)
             game_payload, patch_tags = patch_game_for_offline_boot(name, game_payload)
+            game_payload, perf_tags = patch_ff4a_performance(name, game_payload, app_class)
+            patch_tags.extend(perf_tags)
             if patch_tags:
                 print('[DoJa] Offline patch:', name)
                 for patch_tag in patch_tags:
@@ -339,7 +375,7 @@ def merge_jar(original: Path, class_dir: Path, font_bin: Path, cp932_bin: Path,
             if name in written:
                 raise RuntimeError('Compatibility class collides with game JAR: ' + name)
             dest.write(class_file, name)
-        # v41: ScratchPad is linked separately as native ROM data.  Do not put
+        # v42: ScratchPad is linked separately as native ROM data.  Do not put
         # the full ScratchPad payload in the JAR, because KVM inflates whole JAR
         # resources into its heap before ResourceInputStream can read them.
         dest.write(font_bin, 'doja/jpfont.bin')
@@ -347,7 +383,20 @@ def merge_jar(original: Path, class_dir: Path, font_bin: Path, cp932_bin: Path,
 
 
 
-def verify_doja_v41_api(jar_path: Path) -> None:
+
+def verify_ff4a_performance_jar(jar_path: Path, app_class: str) -> None:
+    if app_class != 'FF4A':
+        return
+    with zipfile.ZipFile(jar_path, 'r') as archive:
+        payload = archive.read('m.class')
+    if _FF4A_PERIODIC_GC in payload or _FF4A_PERIODIC_PHONE in payload:
+        raise RuntimeError('FF4A hot-loop patch was not applied')
+    if payload.count(_FF4A_PERIODIC_GC_PATCHED) != 1 or \
+            payload.count(_FF4A_PERIODIC_PHONE_PATCHED) != 1:
+        raise RuntimeError('FF4A hot-loop patch verification is ambiguous')
+    print('[DoJa] FF4A optimization: periodic full GC + redundant phone attribute removed')
+
+def verify_doja_v42_api(jar_path: Path) -> None:
     """Verify generic DoJa image/3D/archive classes needed by FF4A-class titles."""
     required = (
         'com/nttdocomo/ui/Palette.class',
@@ -367,26 +416,34 @@ def verify_doja_v41_api(jar_path: Path) -> None:
         'com/nttdocomo/util/JarInflater$BitReader.class',
         'com/nttdocomo/util/JarInflater$Huffman.class',
         'nds/doja/image/IndexedGifDecoder.class',
+        'nds/doja/FastPath.class',
+        'nds/pstros/video/DoJaFastBlit.class',
     )
     with zipfile.ZipFile(jar_path, 'r') as archive:
         names = set(archive.namelist())
         missing = [name for name in required if name not in names]
         if missing:
-            raise RuntimeError('Missing v41 DoJa API class: ' + ', '.join(missing))
+            raise RuntimeError('Missing v42 DoJa API class: ' + ', '.join(missing))
         paletted = archive.read('com/nttdocomo/ui/PalettedImage.class')
         graphics = archive.read('com/nttdocomo/ui/Graphics.class')
         inflater = archive.read('com/nttdocomo/util/JarInflater.class')
         raw_inflater = archive.read('com/nttdocomo/util/JarInflater$RawInflater.class')
+        fast_path = archive.read('nds/doja/FastPath.class')
+        fast_blit = archive.read('nds/pstros/video/DoJaFastBlit.class')
         if not all(token in paletted for token in (b'createPalettedImage', b'getPalette', b'setTransparentIndex')):
             raise RuntimeError('PalettedImage.class is stale')
         if not all(token in graphics for token in (b'Graphics3D', b'setFlipMode', b'getPixels', b'setPixels')):
-            raise RuntimeError('Graphics.class lacks v41 DoJa image/3D API')
+            raise RuntimeError('Graphics.class lacks v42 DoJa image/3D API')
         if not all(token in inflater for token in (b'getInputStream', b'getSize', b'missing zip directory')):
             raise RuntimeError('JarInflater.class is stale')
         if not all(token in raw_inflater for token in (
                 b'LENGTH_BASE', b'DIST_BASE', b'inflate', b'FIXED_LITERAL', b'copyMatch')):
             raise RuntimeError('JarInflater raw-DEFLATE engine is stale')
-    print('[DoJa] v41 API verify: palette image + graphics3d + ScratchPad JAR inflater')
+        if not all(token in fast_path for token in (b'present', b'drawImageAlpha', b'drawRegionAlpha')):
+            raise RuntimeError('FastPath.class is stale')
+        if not all(token in fast_blit for token in (b'Video', b'blit', b'drawImageAlpha')):
+            raise RuntimeError('DoJaFastBlit.class is stale')
+    print('[DoJa] v42 API verify: FF4A fast bridge + palette/graphics3d/JAR inflater')
 
 
 def verify_cp932_jar(jar_path: Path) -> None:
@@ -402,19 +459,19 @@ def verify_cp932_jar(jar_path: Path) -> None:
         )
         for name in required:
             if name not in names:
-                raise RuntimeError('Missing v41 SJIS runtime entry: ' + name)
+                raise RuntimeError('Missing v42 SJIS runtime entry: ' + name)
         table = archive.read('doja/cp932.tbl')
         bitmap_font_class = archive.read('nds/doja/font/BitmapJapaneseFont.class')
         if b'isNonPrintingControl' not in bitmap_font_class:
-            raise RuntimeError('Missing v41 NUL/control padding font fix')
+            raise RuntimeError('Missing v42 NUL/control padding font fix')
     if len(table) < 12 or table[:4] != b'DJC2':
-        raise RuntimeError('Invalid v41 CP932 mapping resource')
+        raise RuntimeError('Invalid v42 CP932 mapping resource')
     version, single_count, double_count, reverse_count = struct.unpack_from('>HHHH', table, 4)
     expected = 12 + single_count * 2 + double_count * 2 + reverse_count * 4
     if version != 1 or single_count != 256 or double_count != 11280:
-        raise RuntimeError('Unexpected v41 CP932 table dimensions')
+        raise RuntimeError('Unexpected v42 CP932 table dimensions')
     if reverse_count < 9000 or len(table) != expected:
-        raise RuntimeError('Truncated v41 CP932 reverse map')
+        raise RuntimeError('Truncated v42 CP932 reverse map')
     print('[DoJa] SJIS verify: default=SJIS decode=%d encode=%d table=%d' % (
         single_count + double_count, reverse_count, len(table)))
 
@@ -426,7 +483,7 @@ def verify_offline_jar(jar_path: Path) -> None:
     with zipfile.ZipFile(jar_path, 'r') as archive:
         names = set(archive.namelist())
         if 'doja/scratchpad.bin' in names:
-            raise RuntimeError('v41 game.jar must not contain doja/scratchpad.bin')
+            raise RuntimeError('v42 game.jar must not contain doja/scratchpad.bin')
         print('[DoJa] Native SP verify: JAR entry absent')
         try:
             data = archive.read('j.class')
@@ -475,7 +532,7 @@ def verify_offline_jar(jar_path: Path) -> None:
     print('[DoJa] Segment stream verify: patched=%d legacy=%d' % (
         stream_count, legacy_stream_count))
     if stream_count != 13 or legacy_stream_count != 0:
-        raise RuntimeError('Final embedded/game.jar is missing the v41 zero-copy segment patch')
+        raise RuntimeError('Final embedded/game.jar is missing the v42 zero-copy segment patch')
 
 
 
@@ -521,7 +578,7 @@ def _class_super_name(data: bytes) -> str:
 
 
 def verify_direct_scratchpad_jar(jar_path: Path) -> None:
-    """Verify v41's separate top-level connection and input stream."""
+    """Verify v42's separate top-level connection and input stream."""
     with zipfile.ZipFile(jar_path, 'r') as archive:
         names = set(archive.namelist())
         try:
@@ -534,7 +591,7 @@ def verify_direct_scratchpad_jar(jar_path: Path) -> None:
                 'com/sun/cldc/io/j2me/scratchpad/ScratchpadByteArrayInputStream.class')
             http = archive.read('com/sun/cldc/io/j2me/http/Protocol.class')
         except KeyError as exc:
-            raise RuntimeError('Missing v41 ScratchPad zero-copy classes') from exc
+            raise RuntimeError('Missing v42 ScratchPad zero-copy classes') from exc
 
     scratchpad_classes = sorted(
         name for name in names
@@ -575,7 +632,7 @@ def verify_direct_scratchpad_jar(jar_path: Path) -> None:
     if (not has_native or not creates_separate_stream or
             not segment_patch_classes or nested_present or
             legacy or not http_direct or not lifecycle_ok):
-        raise RuntimeError('v41 ScratchPad segment-stream verification failed')
+        raise RuntimeError('v42 ScratchPad segment-stream verification failed')
 
 def write_metadata(project: Path, jam: dict[str, str], app_name: str, app_class: str,
                    app_param: str, rom_code: str, output_stem: str,
@@ -691,6 +748,8 @@ def write_prepared_marker(project: Path, output_stem: str, scratchpad_size: int,
         'config_stub_sha256': sha256_file(project / 'tools' / 'compile_stubs' / 'nds' / 'pstros' / 'ConfigData.java'),
         'fontgen_source_sha256': sha256_file(project / 'tools' / 'fontgen.py'),
         'bitmap_font_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'font' / 'BitmapJapaneseFont.java'),
+        'fast_path_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'FastPath.java'),
+        'fast_blit_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'nds' / 'pstros' / 'video' / 'DoJaFastBlit.java'),
         'property_source_sha256': sha256_file(project / 'kvm' / 'VmCommon' / 'src' / 'property.c'),
         'cp932gen_source_sha256': sha256_file(project / 'tools' / 'cp932gen.py'),
         'cp932_codec_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'encoding' / 'Cp932Codec.java'),
@@ -740,7 +799,7 @@ def main() -> int:
     app_class = jam.get('AppClass', 'Main').strip() or 'Main'
     app_param = jam.get('AppParam', '0').strip() or '0'
     app_name = (args.name or jar.stem).strip()
-    output_stem = safe_stem(app_name) + '_doja_v41'
+    output_stem = safe_stem(app_name) + '_doja_v42'
     corpse_party_compat = detect_corpse_party_compat(jar)
     work = project / 'build_doja'
     shutil.rmtree(work, ignore_errors=True)
@@ -762,7 +821,7 @@ def main() -> int:
     print('[DoJa] App param :', app_param)
     print('[DoJa] Profile   :', jam.get('ProfileVer', 'unknown'))
     print('[DoJa] Viewport  : native 240x240 at X=%d Y=%d (no fit)' % (args.screen_x, args.screen_y))
-    print('[DoJa] Compat    :', 'Corpse Party exact-signature patch' if corpse_party_compat else 'generic game')
+    print('[DoJa] Compat    :', 'FF4A exact-signature performance build' if app_class == 'FF4A' else ('Corpse Party exact-signature patch' if corpse_party_compat else 'generic game'))
     normalized_sp, _sp_mode = normalize_scratchpad(sp, jam, work / 'scratchpad_payload.bin')
     class_dir = compile_compat(project, tool_root, work)
     font_bin = work / 'jpfont.bin'
@@ -796,7 +855,8 @@ def main() -> int:
     print('[DoJa] Native SP :', native_sp, native_sp.stat().st_size, 'bytes')
     print('[DoJa] Native SP backup:', native_sp_backup, native_sp_backup.stat().st_size, 'bytes')
     verify_cp932_jar(project / 'embedded' / 'game.jar')
-    verify_doja_v41_api(project / 'embedded' / 'game.jar')
+    verify_doja_v42_api(project / 'embedded' / 'game.jar')
+    verify_ff4a_performance_jar(project / 'embedded' / 'game.jar', app_class)
     verify_offline_jar(project / 'embedded' / 'game.jar')
     verify_direct_scratchpad_jar(project / 'embedded' / 'game.jar')
     # Keep the inherited native audio object linkable. DoJa audio is intentionally
@@ -814,7 +874,7 @@ def main() -> int:
     print('[DoJa] Output ROM  :', output_stem + '.nds')
     print('[DoJa] Marker      :', prepared_marker)
     print('[OK] Prepared embedded/game.jar')
-    print('[OK] Prepared embedded/doja_scratchpad.bin (v41 same-name SAV file + legacy DJS import + default icon + full CP932/SJIS + Latin fix + native viewport/no fit + generic game metadata + input + zero-copy + DS 2432 KiB / DSi 8192 KiB heap)')
+    print('[OK] Prepared embedded/doja_scratchpad.bin (v42 same-name SAV file + legacy DJS import + default icon + full CP932/SJIS + Latin fix + native viewport/no fit + generic game metadata + input + zero-copy + DS 2432 KiB / DSi 8192 KiB heap)')
     print('[OK] Prepared build_doja/doja_scratchpad.bin (automatic restore backup)')
     print('[NEXT] Run build.bat')
     return 0

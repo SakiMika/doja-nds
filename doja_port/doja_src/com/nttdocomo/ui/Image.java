@@ -54,7 +54,9 @@ public class Image {
         if (value > 255) value = 255;
         if (alpha != value) {
             alpha = value;
-            effectDirty = true;
+            // v42: ordinary/paletted images are alpha-blended by Video.blit.
+            // Only color-key images still need a software effect cache.
+            if (transparentEnabled) effectDirty = true;
         }
     }
 
@@ -90,6 +92,22 @@ public class Image {
 
     final boolean _isDisposed() {
         return disposed;
+    }
+
+    final int _alpha() {
+        checkAlive();
+        return alpha;
+    }
+
+    final boolean _hasSoftwareColorKey() {
+        checkAlive();
+        return transparentEnabled;
+    }
+
+    final javax.microedition.lcdui.Image _baseDisplayImage() {
+        checkAlive();
+        _beforeDisplay();
+        return midpImage;
     }
 
     /** Returns a MIDP image with DoJa alpha/transparency applied. */

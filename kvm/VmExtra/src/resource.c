@@ -162,7 +162,7 @@ void Java_com_sun_cldc_io_ResourceInputStream_size(void) {
 }
 
 /*=========================================================================
- * DoJa v41 ScratchPad ROM access with persistent same-name .sav saves.
+ * DoJa v42 ScratchPad ROM access with persistent same-name .sav saves.
  *
  * The selected game ScratchPad remains linked read-only in ROM. Only
  * 256-byte chunks changed by the game are copied into a small native overlay.
@@ -700,7 +700,7 @@ void Java_com_sun_cldc_io_j2me_scratchpad_Protocol_nativeWrite(void) {
     int size = dojaSpSize();
     int chunk;
     if (position < 0 || position >= size) return;
-    /* v41: never mount/probe storage from a single-byte write. */
+    /* v42: never mount/probe storage from a single-byte write. */
     chunk = dojaSpFindChunk(position / DOJA_SP_CHUNK_SIZE, 1);
     if (chunk >= 0) {
         dojaSpChunks[chunk][position % DOJA_SP_CHUNK_SIZE] =

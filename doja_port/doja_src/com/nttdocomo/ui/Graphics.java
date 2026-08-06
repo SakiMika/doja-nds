@@ -149,23 +149,44 @@ public final class Graphics implements Graphics3D {
 
     public void drawImage(Image image, int x, int y) {
         if (image == null) return;
-        javax.microedition.lcdui.Image src = image._displayImage();
+        int alpha = image._alpha();
+        if (alpha <= 0) return;
+        boolean nativeAlpha = alpha < 255 && !image._hasSoftwareColorKey();
+        javax.microedition.lcdui.Image src = nativeAlpha
+            ? image._baseDisplayImage() : image._displayImage();
+        int anchor = javax.microedition.lcdui.Graphics.TOP |
+            javax.microedition.lcdui.Graphics.LEFT;
         if (flipMode == FLIP_NONE) {
-            midp.drawImage(src, x, y,
-                javax.microedition.lcdui.Graphics.TOP | javax.microedition.lcdui.Graphics.LEFT);
+            if (nativeAlpha) nds.doja.FastPath.drawImageAlpha(midp, src, x, y, 0, alpha);
+            else midp.drawImage(src, x, y, anchor);
         } else {
-            midp.drawRegion(src, 0, 0, src.getWidth(), src.getHeight(),
-                midpTransform(flipMode), x, y,
-                javax.microedition.lcdui.Graphics.TOP | javax.microedition.lcdui.Graphics.LEFT);
+            if (nativeAlpha) {
+                nds.doja.FastPath.drawImageAlpha(midp, src, x, y,
+                    midpTransform(flipMode), alpha);
+            } else {
+                midp.drawRegion(src, 0, 0, src.getWidth(), src.getHeight(),
+                    midpTransform(flipMode), x, y, anchor);
+            }
         }
         markOwner();
     }
 
     public void drawImage(Image image, int x, int y, int sx, int sy, int w, int h) {
         if (image != null && w > 0 && h > 0) {
-            javax.microedition.lcdui.Image src = image._displayImage();
-            midp.drawRegion(src, sx, sy, w, h, midpTransform(flipMode), x, y,
-                javax.microedition.lcdui.Graphics.TOP | javax.microedition.lcdui.Graphics.LEFT);
+            int alpha = image._alpha();
+            if (alpha <= 0) return;
+            boolean nativeAlpha = alpha < 255 && !image._hasSoftwareColorKey();
+            javax.microedition.lcdui.Image src = nativeAlpha
+                ? image._baseDisplayImage() : image._displayImage();
+            int anchor = javax.microedition.lcdui.Graphics.TOP |
+                javax.microedition.lcdui.Graphics.LEFT;
+            if (nativeAlpha) {
+                nds.doja.FastPath.drawRegionAlpha(midp, src, sx, sy, w, h,
+                    midpTransform(flipMode), x, y, alpha);
+            } else {
+                midp.drawRegion(src, sx, sy, w, h, midpTransform(flipMode),
+                    x, y, anchor);
+            }
             markOwner();
         }
     }
@@ -223,6 +244,12 @@ public final class Graphics implements Graphics3D {
 
     public void _drawGlyph(int[] pixels, int x, int y, int w, int h) {
         midp.drawRGB(pixels, 0, w, x, y, w, h, true);
+        markOwner();
+    }
+
+    public void _drawGlyphImage(javax.microedition.lcdui.Image image, int x, int y) {
+        midp.drawImage(image, x, y,
+            javax.microedition.lcdui.Graphics.TOP | javax.microedition.lcdui.Graphics.LEFT);
         markOwner();
     }
 

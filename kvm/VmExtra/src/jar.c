@@ -562,7 +562,7 @@ loadJARFileEntryInternal(JAR_INFO entry, const unsigned char *centralInfo,
     unsigned long expectedCRC = CENCRC(centralInfo); /* expected CRC */
     unsigned long actualCRC;
     unsigned char *result = NULL;
-    /* v41: hot-path JAR trace disabled. */
+    /* v42: hot-path JAR trace disabled. */
 
 #if JAR_FILES_USE_STDIO
     FILE *file = entry->u.jar.file;
@@ -581,9 +581,9 @@ loadJARFileEntryInternal(JAR_INFO entry, const unsigned char *centralInfo,
     /* This may cause a GC, so we have to extract out of "entry" all the
      * info we need, before calling this.
      */
-    /* v41: hot-path JAR trace disabled. */
+    /* v42: hot-path JAR trace disabled. */
     result = (unsigned char *)mallocBytes(extraBytes + decompLen);
-    /* v41: hot-path JAR trace disabled. */
+    /* v42: hot-path JAR trace disabled. */
 #if !COMPILING_FOR_KVM
     if (result == NULL) {
         goto errorReturn;
@@ -635,11 +635,11 @@ loadJARFileEntryInternal(JAR_INFO entry, const unsigned char *centralInfo,
                 memoryInput.remaining = (int)compLen + INFLATER_EXTRA_BYTES;
                 arg = &memoryInput;
 #endif
-                /* v41: hot-path JAR trace disabled. */
+                /* v42: hot-path JAR trace disabled. */
                 inflateOK = inflateData(arg, 
                                (JarGetByteFunctionType)jar_getBytes, compLen, 
                                     &decompData, decompLen);
-                /* v41: hot-path JAR trace disabled. */
+                /* v42: hot-path JAR trace disabled. */
                 /* The inflater can allocate memory, so we need to regenerate
                  * value from decompData. */
                 result = decompData - extraBytes;
@@ -657,15 +657,15 @@ loadJARFileEntryInternal(JAR_INFO entry, const unsigned char *centralInfo,
     }
 
     if (result != NULL) { 
-        /* v41: hot-path JAR trace disabled. */
+        /* v42: hot-path JAR trace disabled. */
         actualCRC = jarCRC32(result + extraBytes, decompLen);
-        /* v41: hot-path JAR trace disabled. */
+        /* v42: hot-path JAR trace disabled. */
         if (actualCRC != expectedCRC) { 
             goto errorReturn;
         }
     }
     *lengthP = decompLen;
-    /* v41: hot-path JAR trace disabled. */
+    /* v42: hot-path JAR trace disabled. */
     return (void *)result;
 
 errorReturn:    

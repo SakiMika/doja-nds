@@ -16,11 +16,11 @@
 #error "Wrong generated DoJa metadata: run build_doja.bat for this source version"
 #endif
 #if DEFAULTHEAPSIZE != (2432*1024)
-#error "DoJa v41 requires a 2432 KiB DS fallback heap"
+#error "DoJa v42 requires a 2432 KiB DS fallback heap"
 #endif
 #define DOJA_DSI_HEAPSIZE (8*1024*1024)
 #if ENABLE_HEAP_COMPACTION != 0
-#error "DoJa v41 keeps KVM heap compaction disabled"
+#error "DoJa v42 keeps KVM heap compaction disabled"
 #endif
 
 extern char *UserClassPath;
@@ -61,7 +61,7 @@ static const char *dojaSaveStageName(int stage) {
 
 static void dojaSaveUiRender(void) {
     consoleClear();
-    iprintf("DoJa v41\n");
+    iprintf("DoJa v42\n");
     iprintf("------------------------------\n");
     iprintf("MODE: RAM-FIRST SAVE\n");
     iprintf("BOOT: %s\n", dojaBootStage);
@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
     consoleDemoInit();
     soundEnable();
     pstrosAudioDiagInit();
-    /* v41 keeps the VM console visible until the game renders.  v38 hid
+    /* v42 keeps the VM console visible until the game renders.  v38 hid
      * Java exceptions, so a failed app.start() looked identical to a hang. */
     pstrosSetVmConsoleEnabled(1);
 

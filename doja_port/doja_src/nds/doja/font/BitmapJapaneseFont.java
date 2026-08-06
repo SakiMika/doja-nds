@@ -12,6 +12,14 @@ public final class BitmapJapaneseFont {
     private static int baseHeight = 12;
     private static int bytesPerGlyph = 18;
     private static int[] renderBuffer = new int[24 * 24];
+    private static final int STRING_CACHE_SIZE = 24;
+    private static final String[] cacheText = new String[STRING_CACHE_SIZE];
+    private static final int[] cacheHeight = new int[STRING_CACHE_SIZE];
+    private static final int[] cacheColor = new int[STRING_CACHE_SIZE];
+    private static final int[] cacheAge = new int[STRING_CACHE_SIZE];
+    private static final javax.microedition.lcdui.Image[] cacheImage =
+        new javax.microedition.lcdui.Image[STRING_CACHE_SIZE];
+    private static int cacheClock;
     private static boolean loaded;
     private static int missingReported;
 
@@ -32,21 +40,112 @@ public final class BitmapJapaneseFont {
     }
 
     public static void drawString(Graphics graphics, String text, int x, int baseline, int height) {
-        if (text == null || graphics == null) {
-            return;
-        }
+        if (text == null || graphics == null) return;
         text = Cp932Codec.normalizeForDisplay(text);
         ensureLoaded();
-        int cursor = x;
+        int width = measuredWidth(text, height);
+        if (width <= 0) return;
         int top = baseline - height;
+
+        // FF4A redraws the same Japanese menu/battle labels every frame.
+        // Cache a complete label so subsequent frames are one native blit,
+        // not one Java scale loop + drawRGB conversion per glyph.
+        if (width <= 240 && height > 0 && height <= 24) {
+            javax.microedition.lcdui.Image cached = cachedString(
+                text, width, height, graphics.getColor());
+            graphics._drawGlyphImage(cached, x, top);
+            return;
+        }
+
+        int cursor = x;
         int i;
         for (i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
-            if (isNonPrintingControl(c)) {
-                continue;
-            }
+            if (isNonPrintingControl(c)) continue;
             drawGlyph(graphics, c, cursor, top, height);
             cursor += advance(c, height);
+        }
+    }
+
+    private static int measuredWidth(String text, int height) {
+        int width = 0;
+        int i;
+        for (i = 0; i < text.length(); i++) width += advance(text.charAt(i), height);
+        return width;
+    }
+
+    private static javax.microedition.lcdui.Image cachedString(
+            String text, int width, int height, int rgb) {
+        int i;
+        int victim = 0;
+        int oldest = 0x7FFFFFFF;
+        cacheClock++;
+        if (cacheClock <= 0) cacheClock = 1;
+        for (i = 0; i < STRING_CACHE_SIZE; i++) {
+            if (cacheImage[i] != null && cacheHeight[i] == height &&
+                    cacheColor[i] == rgb && text.equals(cacheText[i])) {
+                cacheAge[i] = cacheClock;
+                return cacheImage[i];
+            }
+            if (cacheImage[i] == null) {
+                victim = i;
+                oldest = -1;
+                break;
+            }
+            if (cacheAge[i] < oldest) {
+                oldest = cacheAge[i];
+                victim = i;
+            }
+        }
+        int[] pixels = new int[width * height];
+        int cursor = 0;
+        int color = 0xFF000000 | rgb;
+        for (i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (isNonPrintingControl(c)) continue;
+            renderGlyphInto(pixels, width, c, cursor, height, color);
+            cursor += advance(c, height);
+        }
+        javax.microedition.lcdui.Image image =
+            javax.microedition.lcdui.Image.createRGBImage(pixels, width, height, true);
+        cacheText[victim] = text;
+        cacheHeight[victim] = height;
+        cacheColor[victim] = rgb;
+        cacheAge[victim] = cacheClock;
+        cacheImage[victim] = image;
+        return image;
+    }
+
+    private static void renderGlyphInto(int[] pixels, int stride, char c,
+            int destX, int size, int color) {
+        int width = c <= 0x007F ? (size + 1) / 2 : size;
+        int index = find(c);
+        if (index < 0 && glyphs != null) {
+            index = find('〓');
+            if (index < 0) index = find('?');
+        }
+        int dx;
+        int dy;
+        if (index < 0 || glyphs == null) {
+            for (dy = 0; dy < size; dy++) {
+                for (dx = 0; dx < width; dx++) {
+                    if (dx == 0 || dy == 0 || dx == width - 1 || dy == size - 1)
+                        pixels[dy * stride + destX + dx] = color;
+                }
+            }
+            return;
+        }
+        int srcBase = index * bytesPerGlyph;
+        int sourceWidth = c <= 0x007F ? (baseWidth + 1) / 2 : baseWidth;
+        for (dy = 0; dy < size; dy++) {
+            int sy = (dy * baseHeight) / size;
+            int row = dy * stride + destX;
+            for (dx = 0; dx < width; dx++) {
+                int sx = (dx * sourceWidth) / width;
+                int bit = sy * baseWidth + sx;
+                if ((glyphs[srcBase + (bit >> 3)] & (0x80 >> (bit & 7))) != 0)
+                    pixels[row + dx] = color;
+            }
         }
     }
 

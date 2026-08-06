@@ -1638,13 +1638,13 @@ loadMethodAttributes(FILEPOINTER_HANDLE ClassFileH,
     bool_t needCode = !(thisMethod->accessFlags & (ACC_NATIVE | ACC_ABSTRACT));
     bool_t needExceptionTable = TRUE;  /* always optional */
 
-    /* v41: hot-path loader trace disabled. */
+    /* v42: hot-path loader trace disabled. */
     /* See if the field has any attributes in the class file */
     for (attrIndex = 0; attrIndex < attrCount; attrIndex++) {
         unsigned short attrNameIndex = loadShort(ClassFileH);
         unsigned int   attrLength    = loadCell(ClassFileH);
         char*          attrName      = getUTF8String(StringPoolH, attrNameIndex);
-        /* v41: hot-path loader trace disabled. */
+        /* v42: hot-path loader trace disabled. */
         /* Check if the attribute contains source code */
         if (strcmp(attrName, "Code") == 0) {
             unsigned int actualLength;
@@ -1652,9 +1652,9 @@ loadMethodAttributes(FILEPOINTER_HANDLE ClassFileH,
                 raiseExceptionWithMessage(ClassFormatError,
                     KVM_MSG_DUPLICATE_CODE_ATTRIBUTE);
             }
-            /* v41: hot-path loader trace disabled. */
+            /* v42: hot-path loader trace disabled. */
             actualLength = loadCodeAttribute(ClassFileH, thisMethodH, StringPoolH);
-            /* v41: hot-path loader trace disabled. */
+            /* v42: hot-path loader trace disabled. */
             if (actualLength != attrLength) {
                 raiseExceptionWithMessage(ClassFormatError,
                     KVM_MSG_BAD_CODE_ATTRIBUTE_LENGTH);
@@ -1671,7 +1671,7 @@ loadMethodAttributes(FILEPOINTER_HANDLE ClassFileH,
             }
             needExceptionTable = FALSE;
             exceptionCount = loadShort(ClassFileH);
-            /* v41: hot-path loader trace disabled. */
+            /* v42: hot-path loader trace disabled. */
             if (2 * exceptionCount + 2 != attrLength) {
                 raiseExceptionWithMessage(ClassFormatError,
                     KVM_MSG_BAD_EXCEPTION_ATTRIBUTE);
@@ -1688,12 +1688,12 @@ loadMethodAttributes(FILEPOINTER_HANDLE ClassFileH,
             }
         } else {
             /* Unrecognized attribute; skip */
-            /* v41: hot-path loader trace disabled. */
+            /* v42: hot-path loader trace disabled. */
             skipBytes(ClassFileH, attrLength);
-            /* v41: hot-path loader trace disabled. */
+            /* v42: hot-path loader trace disabled. */
         }
     }
-    /* v41: hot-path loader trace disabled. */
+    /* v42: hot-path loader trace disabled. */
     if (needCode) {
         raiseExceptionWithMessage(ClassFormatError,
             KVM_MSG_MISSING_CODE_ATTRIBUTE);
@@ -1743,7 +1743,7 @@ loadOneMethod(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
         if (CurrentClass->clazz.baseName) {
             const char *cn = UStringInfo(CurrentClass->clazz.baseName);
             if (strcmp(cn, "a") == 0 || strcmp(cn, "GloftDIRU") == 0) {
-                /* v41: hot-path loader trace disabled. */
+                /* v42: hot-path loader trace disabled. */
             }
         }
         if (strcmp(methodName, "<clinit>") == 0) {
@@ -1801,9 +1801,9 @@ loadOneMethod(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
             thisMethod->u.java.handlers = NIL;
         END_ASSERTING_NO_ALLOCATION
 
-        /* v41: hot-path loader trace disabled. */
+        /* v42: hot-path loader trace disabled. */
         loadMethodAttributes(ClassFileH, thisMethodH, StringPoolH);
-        /* v41: hot-path loader trace disabled. */
+        /* v42: hot-path loader trace disabled. */
 
         /* Garbage collection may have happened */
         thisMethod = unhand(thisMethodH);
@@ -1844,7 +1844,7 @@ loadMethods(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
 {
     const char *dbgClassName = CurrentClass->clazz.baseName ? UStringInfo(CurrentClass->clazz.baseName) : "?";
     unsigned short methodCount = loadShort(ClassFileH);
-    /* v41: hot-path loader trace disabled. */
+    /* v42: hot-path loader trace disabled. */
     if (methodCount == 0) {
         return;
     }
@@ -1857,7 +1857,7 @@ loadMethods(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
 #else
         METHODTABLE methodTable = (METHODTABLE)callocPermanentObject(tableSize);
 #endif
-        /* v41: hot-path loader trace disabled. */
+        /* v42: hot-path loader trace disabled. */
         methodTable->length = methodCount;
         CurrentClass->methodTable = methodTable;
 
@@ -1871,7 +1871,7 @@ loadMethods(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
 #if !USESTATIC
             METHOD thisMethod = &methodTable->methods[index];
 #endif
-            /* v41: hot-path loader trace disabled. */
+            /* v42: hot-path loader trace disabled. */
 #if USESTATIC
             START_TEMPORARY_ROOTS
                 DECLARE_TEMPORARY_METHOD_ROOT(thisMethod, methodTable, index);
@@ -1880,7 +1880,7 @@ loadMethods(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
 #else
             loadOneMethod(ClassFileH, CurrentClass, &thisMethod, StringPoolH);
 #endif
-            /* v41: hot-path loader trace disabled. */
+            /* v42: hot-path loader trace disabled. */
         }
     END_TEMPORARY_ROOTS
 
@@ -1907,7 +1907,7 @@ loadMethods(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
     }
 #endif /* INCLUDEDEBUGCODE */
 
-    /* v41: hot-path loader trace disabled. */
+    /* v42: hot-path loader trace disabled. */
 }
 
 /*=========================================================================

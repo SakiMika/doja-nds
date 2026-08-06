@@ -11,7 +11,7 @@
 #include <setjmp.h>
 
 //Torlus
-/* DoJa v41: shared standalone heap budget for large DoJa titles.
+/* DoJa v42: shared standalone heap budget for large DoJa titles.
  * Keep compaction disabled because this KVM branch is built around stable
  * native pointers into embedded resources. */
 #define DEFAULTHEAPSIZE (2432*1024)

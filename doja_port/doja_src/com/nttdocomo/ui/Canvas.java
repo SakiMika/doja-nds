@@ -58,8 +58,11 @@ public abstract class Canvas extends Frame {
     }
 
     final void _flush() {
-        repaint();
-        serviceRepaints();
+        ensureScreen();
+        // v42/FF4A: screenImage already contains the completed DoJa frame.
+        // Present it directly instead of repainting it into Pstros emuImage
+        // and then copying that second framebuffer to VRAM.
+        nds.doja.FastPath.present(screenImage);
     }
 
     protected final void keyPressed(int keyCode) {

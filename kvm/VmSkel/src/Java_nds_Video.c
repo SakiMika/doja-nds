@@ -557,6 +557,8 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 	int dstOffset, srcOffset;
 	unsigned short pixel;
 	int hasAlpha;
+	int globalAlphaMode;
+	unsigned int globalAlpha;
 
 	unsigned int A, AM;
 	int dR,dG, dB;
@@ -587,8 +589,11 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 	int clipY = KNI_GetParameterAsInt(10);
 	int clipW = KNI_GetParameterAsInt(11);
 	int clipH = KNI_GetParameterAsInt(12);
-	//transparency type: 0-opaque 1-transparent
+	// transparency type: 0=opaque, 1=source transparency.
+	// v42 reserves negative byte values for native global alpha.
 	jbyte transp = KNI_GetParameterAsByte(13);
+	globalAlphaMode = (((unsigned char)transp & 0x80U) != 0);
+	globalAlpha = ((unsigned int)((unsigned char)transp & 0x7FU)) << 1;
 
 
 	int dstMaxX;
@@ -608,7 +613,7 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 		dst = (jshort*) BG_BMP_RAM(0);
 	}
 
-	/* DoJa v41 native viewport: never resample the game frame.
+	/* DoJa v42 native viewport: never resample the game frame.
 	 * The Java bridge positions the 240x240 canvas at X=8, Y=-24,
 	 * so the DS shows a centered 240x192 window with original pixels. */
 	//check the alpha channel exists
@@ -661,72 +666,69 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 		}
 		
 		j2 = srcY;
-		//contains transparent pixels
-		if (transp) {
-//			transpDraws++;
+		// v42 FF4A fast path: combine source transparency with one global
+		// alpha directly in ARM code. Java no longer allocates/rebuilds an
+		// ARGB image each time Image.setAlpha() changes during fades.
+		if (globalAlphaMode) {
+			for (j = dstY; j < dstMaxY; j++, j2++) {
+				dstOffset = j * dstW + dstX;
+				srcOffset = j2 * srcW + srcX;
+				for (i = dstX; i < dstMaxX; i++, dstOffset++, srcOffset++) {
+					pixel = src[srcOffset];
+					if (hasAlpha) A = (((unsigned char)alpha[srcOffset]) * globalAlpha + 127U) / 255U;
+					else A = (pixel & 0x8000) ? globalAlpha : 0U;
+					if (A >= 254U) {
+						dst[dstOffset] = pixel;
+					} else if (A != 0U) {
+						AM = 255U - A;
+						backPixel = dst[dstOffset];
+						dR = ((backPixel >> 10) & 0x1F) * AM + ((pixel >> 10) & 0x1F) * A;
+						dG = ((backPixel >> 5) & 0x1F) * AM + ((pixel >> 5) & 0x1F) * A;
+						dB = (backPixel & 0x1F) * AM + (pixel & 0x1F) * A;
+						dst[dstOffset] = (short)(0x8000 | ((dR >> 8) << 10) |
+							((dG >> 8) << 5) | (dB >> 8));
+					}
+				}
+			}
+		}
+		// contains transparent pixels
+		else if (transp) {
 			for (j = dstY ; j < dstMaxY; j++, j2++) {
 				dstOffset = j * dstW + dstX;
-				srcOffset = j2 * srcW + srcX; 
-				//use alpha blending
+				srcOffset = j2 * srcW + srcX;
 				if (hasAlpha) {
 					for (i = dstX; i < dstMaxX; i++) {
 						pixel = src[srcOffset];
-						A = alpha[srcOffset++];
-						//draw pixels
-						if (A == 0xFF) { // fully opaque pixel
-							dst[dstOffset] = pixel;
-						}
-						else 
-						if (A != 0) {
-
-	       						AM = 255 - A;
-		       					backPixel = dst[dstOffset];
-		       					dR = ((backPixel >> 10) & 0x1F) * AM;
-	       						dG = ((backPixel >> 5) & 0x1F) * AM;
-	       						dB = ((backPixel ) & 0x1F) * AM;
-	       					
-	       						sR = ((pixel >> 10) & 0x1F) * A;
-	       						sG = ((pixel >> 5 ) & 0x1F) * A;
-	       						sB = ((pixel) & 0x1F) * A;
-	       					
-	       					
-		       					dR += sR;
-		       					dG += sG;
-	       						dB += sB;
-	       					
-	       					
-	       						dR >>= 8;
-	       						dG >>= 8;
-	       						dB >>= 8;
-	       					
-	       						dst[dstOffset] = (short)(0x8000 | (dR<<10 ) | (dG<<5) | (dB)); 		
+						A = (unsigned char)alpha[srcOffset++];
+						if (A == 0xFF) dst[dstOffset] = pixel;
+						else if (A != 0) {
+							AM = 255 - A;
+							backPixel = dst[dstOffset];
+							dR = ((backPixel >> 10) & 0x1F) * AM + ((pixel >> 10) & 0x1F) * A;
+							dG = ((backPixel >> 5) & 0x1F) * AM + ((pixel >> 5) & 0x1F) * A;
+							dB = (backPixel & 0x1F) * AM + (pixel & 0x1F) * A;
+							dst[dstOffset] = (short)(0x8000 | ((dR >> 8) << 10) |
+								((dG >> 8) << 5) | (dB >> 8));
 						}
 						dstOffset++;
 					}
-				} 
-				//no alpha blending
-				else {
+				} else {
 					for (i = dstX; i < dstMaxX; i++) {
 						pixel = src[srcOffset++];
-						//draw only opaque pixels
-						if ((pixel & 0x8000) != 0) { //!=0
-							dst[dstOffset] = pixel;
-						}
+						if ((pixel & 0x8000) != 0) dst[dstOffset] = pixel;
 						dstOffset++;
 					}
 				}
-			}       
-		} 
-		//contains only opaque pixels
+			}
+		}
+		// Fully opaque rows can be copied by optimized libc/ARM code.
 		else {
-//			opaqueDraws++;
-			for (j = dstY ; j < dstMaxY; j++, j2++) {
+			int rowPixels = dstMaxX - dstX;
+			for (j = dstY; j < dstMaxY; j++, j2++) {
 				dstOffset = j * dstW + dstX;
-				srcOffset = j2 * srcW + srcX; 
-				for (i = dstX; i < dstMaxX; i++) {
-					dst[dstOffset++] = src[srcOffset++];
-				}
-			}       
+				srcOffset = j2 * srcW + srcX;
+				memcpy(dst + dstOffset, src + srcOffset, rowPixels * sizeof(jshort));
+			}
 		}
 	}
 
