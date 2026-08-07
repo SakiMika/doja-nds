@@ -1,0 +1,10 @@
+DOJA V48 EMPTY
+
+Khong chay build.bat truoc.
+Hay chay build-doja.bat, chon JAR + JAM + SP.
+Script se tu:
+- doc AppClass/AppParam va kich thuoc tu JAM;
+- dua game.jar ve STORED;
+- nen ScratchPad bang Nintendo LZ77;
+- tao metadata/save name;
+- kiem tra va build ROM.

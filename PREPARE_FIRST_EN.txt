@@ -1,0 +1,17 @@
+DOJA V48 EMPTY
+
+Do not run build.bat first on a clean source tree.
+
+Run build-doja.bat and select the game's JAR + JAM + SP.
+
+The script automatically:
+- reads AppClass/AppParam and supported size metadata from the JAM;
+- rebuilds the top-level game.jar using STORED entries;
+- applies only supported signature-matched game-specific patches;
+- packages the prepared ScratchPad using Nintendo LZ77 type 0x10;
+- generates ROM/save metadata;
+- verifies the prepared data;
+- builds the NDS ROM.
+
+For games with compressed resource packs inside the ScratchPad, additional
+game-specific STORED conversion may be required for maximum loading speed.

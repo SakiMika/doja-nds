@@ -69,6 +69,6 @@ exit /b 1
 :invalid
 echo [ERROR] DoJa v48 Empty has not been prepared with a game,
 echo         or the generated data is inconsistent.
-echo Run build-doja.bat and select the JAR, JAM, and SP first.
+echo Run build-doja-en.bat and select the JAR, JAM, and SP first.
 pause
 exit /b 1
