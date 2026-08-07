@@ -340,20 +340,20 @@ public class EmuCanvas extends NDSCanvas {
 			img = emuImage;
 		}
 
-		//System.out.println("EmuCanvas: flushGraphics");
+		/* v46 FF4A path: enter VBlank before copying the completed 240x240
+		 * frame into BG3.  The NDS affine engine performs the visible resize;
+		 * Java never resamples the image.  Input is handled by the dedicated
+		 * DoJa pump, so do not scan it again in every presentation. */
+		Bios.swiWaitForVBlank();
 		NDSGraphics g = getGraphics();
 		paintCanvasContent(g, displayable, img);
-		//updateFps();
-			
+
 		if (ConfigData.drawWait > 0) {
 			try{
 				Thread.sleep(ConfigData.drawWait);
 			} catch (Exception e) {
-				//System.out.println("thread.sleep interrupted! " + e);
 			}
 		}
-		checkKeys();
-		Bios.swiWaitForVBlank();
 
 	}
 	public void checkKeys() {
@@ -560,8 +560,11 @@ public class EmuCanvas extends NDSCanvas {
 		}
 		
 		if (g != null) {
-			//draw play field
-			g.setClip(screenPosX, screenPosY, Display.WIDTH , Display.HEIGHT);
+			// v46: the DoJa backing image can be 240x240 while Display reports
+			// the physical 256x192 NDS surface. Copy the complete logical frame
+			// into the 256x256 affine BG; clipping to Display.HEIGHT would lose
+			// the lower 48 rows before hardware scaling.
+			g.setClip(screenPosX, screenPosY, img.getWidth(), img.getHeight());
 			g.drawImage(img, screenPosX, screenPosY + topH);
 			
 		} else {

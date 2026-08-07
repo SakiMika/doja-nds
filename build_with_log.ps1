@@ -31,14 +31,14 @@ $archiveLog = Join-Path $logDir ("build_{0}.log" -f $stamp)
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $newLine = [Environment]::NewLine
 $header = @(
-    'DoJa v41 native viewport + game-independent preparation + SAV build log'
+    'DoJa v48 Empty + Nintendo LZ77 build log'
     "Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
     "Project: $PSScriptRoot"
     "DEVKITPRO MSYS2: $dkpPosix"
     '============================================================'
 )
 [System.IO.File]::WriteAllLines($lastLog, $header, $utf8NoBom)
-[System.IO.File]::AppendAllText($lastLog, "Port version: v41$([Environment]::NewLine)", $utf8NoBom)
+[System.IO.File]::AppendAllText($lastLog, "Port version: v48$([Environment]::NewLine)", $utf8NoBom)
 
 function Write-LogLine([AllowEmptyString()][string]$Text) {
     Write-Host $Text
@@ -49,29 +49,14 @@ function Invoke-NativeLogged([string]$Executable, [string[]]$Arguments = @()) {
     return [int]$LASTEXITCODE
 }
 
-# v41: restore the native ScratchPad before make starts.  This catches source
-# overlays and accidental deletion without ever falling back to the old JAR
-# resource path that exhausted the KVM heap.
-$nativeSp = Join-Path $PSScriptRoot 'embedded\doja_scratchpad.bin'
-$nativeSpBackup = Join-Path $PSScriptRoot 'build_doja\doja_scratchpad.bin'
-if (-not (Test-Path -LiteralPath $nativeSp) -and (Test-Path -LiteralPath $nativeSpBackup)) {
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $nativeSp) | Out-Null
-    Copy-Item -LiteralPath $nativeSpBackup -Destination $nativeSp -Force
-    Write-LogLine '[RESTORE] Native ScratchPad restored from build_doja backup.'
-}
-if (-not (Test-Path -LiteralPath $nativeSp)) {
-    Write-LogLine '[ERROR] Missing embedded/doja_scratchpad.bin and no backup exists.'
-    Write-LogLine '[ERROR] Run build_doja.bat again; do not build stale generated files.'
+$blob = Join-Path $PSScriptRoot 'embedded\doja_scratchpad.lz7b'
+if (-not (Test-Path -LiteralPath $blob)) {
+    Write-LogLine '[ERROR] Missing embedded/doja_scratchpad.lz7b. Run build-doja.bat first.'
     Copy-Item $lastLog $archiveLog -Force
     exit 2
 }
-$nativeSpSize = (Get-Item -LiteralPath $nativeSp).Length
-Write-LogLine ("[CHECK] Native ScratchPad: {0} bytes" -f $nativeSpSize)
-if ($nativeSpSize -le 0) {
-    Write-LogLine '[ERROR] Native ScratchPad is empty.'
-    Copy-Item $lastLog $archiveLog -Force
-    exit 2
-}
+Write-LogLine ("[CHECK] Embedded ScratchPad wrapper: {0} bytes" -f (Get-Item -LiteralPath $blob).Length)
+Write-LogLine '[CHECK] Runtime expands Nintendo LZ77 before KVM; NitroFS is not used.'
 
 Write-LogLine '[1/2] Cleaning...'
 $cleanCode = Invoke-NativeLogged $make @('clean')

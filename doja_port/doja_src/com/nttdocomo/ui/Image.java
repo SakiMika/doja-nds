@@ -54,7 +54,7 @@ public class Image {
         if (value > 255) value = 255;
         if (alpha != value) {
             alpha = value;
-            // v42: ordinary/paletted images are alpha-blended by Video.blit.
+            // v46: ordinary/paletted images are alpha-blended by Video.blit.
             // Only color-key images still need a software effect cache.
             if (transparentEnabled) effectDirty = true;
         }

@@ -7,6 +7,8 @@ import nds.pstros.ConfigData;
 public final class MainApp {
     private static boolean terminateRequested;
     private static boolean inputPumpStarted;
+    private static int logicalWidth = 240;
+    private static int logicalHeight = 240;
 
     private MainApp() {
     }
@@ -16,6 +18,10 @@ public final class MainApp {
         String appParam = "0";
         int screenX = 8;
         int screenY = -24;
+        int canvasWidth = 256;
+        int canvasHeight = 192;
+        int requestedLogicalWidth = 240;
+        int requestedLogicalHeight = 240;
         int i;
 
         for (i = 0; args != null && i < args.length; i++) {
@@ -28,11 +34,21 @@ public final class MainApp {
                 screenX = Integer.parseInt(arg.substring(2));
             } else if (arg.startsWith("-Y")) {
                 screenY = Integer.parseInt(arg.substring(2));
+            } else if (arg.startsWith("-W")) {
+                canvasWidth = Integer.parseInt(arg.substring(2));
+            } else if (arg.startsWith("-H")) {
+                canvasHeight = Integer.parseInt(arg.substring(2));
+            } else if (arg.startsWith("-Q")) {
+                requestedLogicalWidth = Integer.parseInt(arg.substring(2));
+            } else if (arg.startsWith("-R")) {
+                requestedLogicalHeight = Integer.parseInt(arg.substring(2));
             }
         }
 
-        javax.microedition.lcdui.Display.WIDTH = 240;
-        javax.microedition.lcdui.Display.HEIGHT = 240;
+        javax.microedition.lcdui.Display.WIDTH = canvasWidth;
+        javax.microedition.lcdui.Display.HEIGHT = canvasHeight;
+        logicalWidth = requestedLogicalWidth;
+        logicalHeight = requestedLogicalHeight;
         EmuCanvas.screenPosX = screenX;
         EmuCanvas.screenPosY = screenY;
 
@@ -99,6 +115,14 @@ public final class MainApp {
                 }
             }
         }.start();
+    }
+
+    public static int getLogicalWidth() {
+        return logicalWidth;
+    }
+
+    public static int getLogicalHeight() {
+        return logicalHeight;
     }
 
     public static void requestTerminate() {

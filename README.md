@@ -1,19 +1,19 @@
-# DoJa NDS Port v42 — FF4A performance build
+# DoJa v48 Empty
 
-v42 keeps native 240×240 rendering (X=8, Y=-24) and multi-game preparation,
-but adds an exact-signature optimization path for Final Fantasy IV The After.
+Đây là source trống, không khóa sẵn một game.
 
-## FF4A optimizations
+## Cách dùng
 
-- Directly presents the completed DoJa framebuffer; removes the extra repaint/copy.
-- Global image alpha is blended in native ARM code; fades no longer rebuild ARGB images.
-- Caches complete Japanese labels, reducing per-glyph Java scaling and drawRGB calls.
-- Removes FF4A's forced full GC every 75 frames and redundant phone attribute call.
-- Compiles the KVM interpreter/cache/video hot objects as ARM `-O3`.
-- Opaque image rows use `memcpy`.
+Chạy `build-doja.bat`, sau đó nhập lần lượt đường dẫn **JAR**, **JAM** và **SP**. Script tự động:
 
-The bytecode patch only runs when `AppClass=FF4A` and both exact `m.class`
-signatures match. Other games remain unchanged.
+1. Đọc `AppClass`, `AppParam`, `SPsize` và cấu hình canvas từ JAM.
+2. Chỉ áp dụng patch bytecode khi đúng chữ ký game được hỗ trợ; game khác không bị vá nhầm.
+3. Tạo `game.jar` mới với toàn bộ entry ở chế độ **STORED** để nạp class nhanh.
+4. Với FF4A đúng phiên bản, chuyển 14 resource pack bên trong ScratchPad sang **STORED** và cập nhật lại 65 record offset/length.
+5. Nén toàn bộ ScratchPad bằng **Nintendo LZ77 type 0x10** thành `embedded/doja_scratchpad.lz7b`.
+6. Tạo `build_doja/prepared_game.jam`, metadata ROM, tên save và font CP932.
+7. Xác minh CRC rồi tự gọi `build.bat`.
 
-Run `build_doja.bat`, select JAR/JAM/SP, then run `build.bat`.
-Use melonDS DSi mode for FF4A. The build still does not stretch 240×240 to 256×192.
+Màn hình boot ghi `DoJa v48 Empty`. DSi mode dùng heap lớn; DS mode vẫn được phép với game nhỏ.
+
+Không trộn `game.jar`, `.lz7b`, `standalone_game.h` hoặc marker từ những lần chuẩn bị khác nhau.

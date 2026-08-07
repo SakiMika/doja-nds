@@ -1,5 +1,5 @@
 /*
- * Copyright © 2003 Sun Microsystems, Inc. All rights reserved.
+ * Copyright Â© 2003 Sun Microsystems, Inc. All rights reserved.
  * SUN PROPRIETARY/CONFIDENTIAL. Use is subject to license terms.
  *
  */
@@ -1319,7 +1319,7 @@ static int
 loadExceptionHandlers(FILEPOINTER_HANDLE ClassFileH, METHOD_HANDLE thisMethodH)
 {
     unsigned short numberOfHandlers = loadShort(ClassFileH);
-    printf("handlers: count=%u\n", numberOfHandlers);
+    /* v46 release: loader trace removed; per-line console I/O dominated boot. */
     if (numberOfHandlers > 0) {
         HANDLERTABLE handlerTable;
         METHOD thisMethod;
@@ -1363,7 +1363,7 @@ loadExceptionHandlers(FILEPOINTER_HANDLE ClassFileH, METHOD_HANDLE thisMethodH)
         /* Method has no associated exception handlers */
         unhand(thisMethodH)->u.java.handlers = NULL;
     }
-    printf("handlers: leave bytes=%u\n", (unsigned int)(numberOfHandlers * 8 + 2));
+    /* v46 release: loader trace removed; per-line console I/O dominated boot. */
     return (numberOfHandlers * 8 + 2);
 }
 
@@ -1638,13 +1638,13 @@ loadMethodAttributes(FILEPOINTER_HANDLE ClassFileH,
     bool_t needCode = !(thisMethod->accessFlags & (ACC_NATIVE | ACC_ABSTRACT));
     bool_t needExceptionTable = TRUE;  /* always optional */
 
-    /* v42: hot-path loader trace disabled. */
+    /* v46: hot-path loader trace disabled. */
     /* See if the field has any attributes in the class file */
     for (attrIndex = 0; attrIndex < attrCount; attrIndex++) {
         unsigned short attrNameIndex = loadShort(ClassFileH);
         unsigned int   attrLength    = loadCell(ClassFileH);
         char*          attrName      = getUTF8String(StringPoolH, attrNameIndex);
-        /* v42: hot-path loader trace disabled. */
+        /* v46: hot-path loader trace disabled. */
         /* Check if the attribute contains source code */
         if (strcmp(attrName, "Code") == 0) {
             unsigned int actualLength;
@@ -1652,9 +1652,9 @@ loadMethodAttributes(FILEPOINTER_HANDLE ClassFileH,
                 raiseExceptionWithMessage(ClassFormatError,
                     KVM_MSG_DUPLICATE_CODE_ATTRIBUTE);
             }
-            /* v42: hot-path loader trace disabled. */
+            /* v46: hot-path loader trace disabled. */
             actualLength = loadCodeAttribute(ClassFileH, thisMethodH, StringPoolH);
-            /* v42: hot-path loader trace disabled. */
+            /* v46: hot-path loader trace disabled. */
             if (actualLength != attrLength) {
                 raiseExceptionWithMessage(ClassFormatError,
                     KVM_MSG_BAD_CODE_ATTRIBUTE_LENGTH);
@@ -1671,7 +1671,7 @@ loadMethodAttributes(FILEPOINTER_HANDLE ClassFileH,
             }
             needExceptionTable = FALSE;
             exceptionCount = loadShort(ClassFileH);
-            /* v42: hot-path loader trace disabled. */
+            /* v46: hot-path loader trace disabled. */
             if (2 * exceptionCount + 2 != attrLength) {
                 raiseExceptionWithMessage(ClassFormatError,
                     KVM_MSG_BAD_EXCEPTION_ATTRIBUTE);
@@ -1688,12 +1688,12 @@ loadMethodAttributes(FILEPOINTER_HANDLE ClassFileH,
             }
         } else {
             /* Unrecognized attribute; skip */
-            /* v42: hot-path loader trace disabled. */
+            /* v46: hot-path loader trace disabled. */
             skipBytes(ClassFileH, attrLength);
-            /* v42: hot-path loader trace disabled. */
+            /* v46: hot-path loader trace disabled. */
         }
     }
-    /* v42: hot-path loader trace disabled. */
+    /* v46: hot-path loader trace disabled. */
     if (needCode) {
         raiseExceptionWithMessage(ClassFormatError,
             KVM_MSG_MISSING_CODE_ATTRIBUTE);
@@ -1743,7 +1743,7 @@ loadOneMethod(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
         if (CurrentClass->clazz.baseName) {
             const char *cn = UStringInfo(CurrentClass->clazz.baseName);
             if (strcmp(cn, "a") == 0 || strcmp(cn, "GloftDIRU") == 0) {
-                /* v42: hot-path loader trace disabled. */
+                /* v46: hot-path loader trace disabled. */
             }
         }
         if (strcmp(methodName, "<clinit>") == 0) {
@@ -1801,9 +1801,9 @@ loadOneMethod(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
             thisMethod->u.java.handlers = NIL;
         END_ASSERTING_NO_ALLOCATION
 
-        /* v42: hot-path loader trace disabled. */
+        /* v46: hot-path loader trace disabled. */
         loadMethodAttributes(ClassFileH, thisMethodH, StringPoolH);
-        /* v42: hot-path loader trace disabled. */
+        /* v46: hot-path loader trace disabled. */
 
         /* Garbage collection may have happened */
         thisMethod = unhand(thisMethodH);
@@ -1844,7 +1844,7 @@ loadMethods(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
 {
     const char *dbgClassName = CurrentClass->clazz.baseName ? UStringInfo(CurrentClass->clazz.baseName) : "?";
     unsigned short methodCount = loadShort(ClassFileH);
-    /* v42: hot-path loader trace disabled. */
+    /* v46: hot-path loader trace disabled. */
     if (methodCount == 0) {
         return;
     }
@@ -1857,7 +1857,7 @@ loadMethods(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
 #else
         METHODTABLE methodTable = (METHODTABLE)callocPermanentObject(tableSize);
 #endif
-        /* v42: hot-path loader trace disabled. */
+        /* v46: hot-path loader trace disabled. */
         methodTable->length = methodCount;
         CurrentClass->methodTable = methodTable;
 
@@ -1871,7 +1871,7 @@ loadMethods(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
 #if !USESTATIC
             METHOD thisMethod = &methodTable->methods[index];
 #endif
-            /* v42: hot-path loader trace disabled. */
+            /* v46: hot-path loader trace disabled. */
 #if USESTATIC
             START_TEMPORARY_ROOTS
                 DECLARE_TEMPORARY_METHOD_ROOT(thisMethod, methodTable, index);
@@ -1880,7 +1880,7 @@ loadMethods(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
 #else
             loadOneMethod(ClassFileH, CurrentClass, &thisMethod, StringPoolH);
 #endif
-            /* v42: hot-path loader trace disabled. */
+            /* v46: hot-path loader trace disabled. */
         }
     END_TEMPORARY_ROOTS
 
@@ -1907,7 +1907,7 @@ loadMethods(FILEPOINTER_HANDLE ClassFileH, INSTANCE_CLASS CurrentClass,
     }
 #endif /* INCLUDEDEBUGCODE */
 
-    /* v42: hot-path loader trace disabled. */
+    /* v46: hot-path loader trace disabled. */
 }
 
 /*=========================================================================
@@ -2034,57 +2034,57 @@ static void loadRawClass(INSTANCE_CLASS CurrentClass, bool_t fatalErrorIfFail)
             loadedReflectively = FALSE;
 
             /* Load version info and magic value */
-            printf("raw phase: version %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
             loadVersionInfo(&ClassFile);
-            printf("raw phase ok: version %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
 
             /* Load and create constant pool */
-            printf("raw phase: constpool %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
             IS_TEMPORARY_ROOT(StringPool,
                               loadConstantPool(&ClassFile, CurrentClass));
-            printf("raw phase ok: constpool %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
 
             /* Load class identification information */
-            printf("raw phase: classinfo %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
             loadClassInfo(&ClassFile, CurrentClass);
-            printf("raw phase ok: classinfo %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
 
             /* Load interface pointers */
-            printf("raw phase: interfaces %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
             loadInterfaces(&ClassFile, CurrentClass);
-            printf("raw phase ok: interfaces %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
 
             /* Load field information */
-            printf("raw phase: fields %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
             loadFields(&ClassFile, CurrentClass, &StringPool);
-            printf("raw phase ok: fields %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
 
             /* Load method information */
-            printf("raw phase: methods %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
             loadMethods(&ClassFile, CurrentClass, &StringPool);
-            printf("raw phase ok: methods %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
 
             /* Load the possible extra attributes (e.g., debug info) */
-            printf("raw phase: attrs %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
             ignoreAttributes(&ClassFile, &StringPool);
-            printf("raw phase ok: attrs %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
 
-            printf("raw phase: eof %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
             ch = loadByteNoEOFCheck(&ClassFile);
             if (ch != -1) {
                 raiseExceptionWithMessage(ClassFormatError,
                     KVM_MSG_CLASSFILE_SIZE_DOES_NOT_MATCH);
             }
 
-            printf("raw phase ok: eof %s ch=%d\n", dbgRawName, ch);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
             /* Ensure that EOF has been reached successfully and close file */
-            printf("raw phase: close %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
             closeClassfile(&ClassFile);
-            printf("raw phase ok: close %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
 
             /* Make the class an instance of class 'java.lang.Class' */
             CurrentClass->clazz.ofClass = JavaLangClass;
-            printf("raw leave ok: %s\n", dbgRawName);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
 
 #if ENABLE_JAVA_DEBUGGER
             if (vmDebugReady) {
@@ -2173,7 +2173,7 @@ loadClassfile(INSTANCE_CLASS InitiatingClass, bool_t fatalErrorIfFail)
             printf("load raw begin: %s\n", getClassName((CLASS)clazz));
             clazz->status = CLASS_LOADING;
             loadRawClass(clazz, fatalErrorIfFail);
-            printf("load raw done: %s status=%d\n", getClassName((CLASS)clazz), clazz->status);
+            /* v46 release: loader trace removed; per-line console I/O dominated boot. */
             if (!fatalErrorIfFail && (clazz->status == CLASS_ERROR)) {
                 return;
             }

@@ -8,7 +8,7 @@ import nds.pstros.video.NDSGraphics;
 import nds.pstros.video.NDSImage;
 import nds.pstros.video.NDSRectangle;
 
-/** Game-JAR bridge to existing Pstros public APIs and the v42 native blitter. */
+/** Game-JAR bridge to existing Pstros public APIs and the v46 native blitter. */
 public final class FastPath {
     private static final NDSRectangle oldClip = new NDSRectangle();
 

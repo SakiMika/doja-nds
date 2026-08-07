@@ -1,4 +1,5 @@
 #include <nds.h>
+#include "standalone_game.h"
 #include <nds/arm9/video.h>
 #include <nds/arm9/background.h>
 #include <nds/arm9/sound.h>
@@ -468,14 +469,16 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_initVideo() {
 	// these are rotation backgrounds so you must set the rotation attributes:
 	// these are fixed point numbers with the low 8 bits the fractional part
 	// this basicaly gives it a 1:1 translation in x and y so you get a nice flat bitmap
-	REG_BG3PA = 1 << 8;
+	/* DoJa v46: the JAM file controls an NDS BG3 affine transform.
+	 * FF4A keeps its original 240x240 logical coordinate system and framebuffer;
+	 * the 2D engine stretches that square to the complete 256x192 NDS display
+	 * without a Java or ARM software resample. Unknown JAMs fall back to 1:1. */
+	REG_BG3PA = DOJA_BG_PA;
 	REG_BG3PB = 0;
 	REG_BG3PC = 0;
-	REG_BG3PD = 1 << 8; //192
-	//REG_BG3PD = 278; //virtual height of 208 pixels
-
-	REG_BG3X = 0;
-	REG_BG3Y = 0;
+	REG_BG3PD = DOJA_BG_PD;
+	REG_BG3X = DOJA_BG_X;
+	REG_BG3Y = DOJA_BG_Y;
 
 	//clean the memory
 	memset((short*) 0x06000000,0x0, 256 * 256 * 2);
@@ -590,7 +593,7 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 	int clipW = KNI_GetParameterAsInt(11);
 	int clipH = KNI_GetParameterAsInt(12);
 	// transparency type: 0=opaque, 1=source transparency.
-	// v42 reserves negative byte values for native global alpha.
+	// v46 reserves negative byte values for native global alpha.
 	jbyte transp = KNI_GetParameterAsByte(13);
 	globalAlphaMode = (((unsigned char)transp & 0x80U) != 0);
 	globalAlpha = ((unsigned int)((unsigned char)transp & 0x7FU)) << 1;
@@ -611,11 +614,23 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 	//direct rendering to the screen
 	if (directDst) {
 		dst = (jshort*) BG_BMP_RAM(0);
+#if DOJA_HW_AFFINE_SCALE
+		/* The visible NDS screen is 256x192, but affine BG3 samples from a
+		 * 256x256 bitmap. FF4A's logical framebuffer is 240x240 at (8,8).
+		 * Do not clip that source to Display.HEIGHT=192 before BG3 can scale
+		 * it; copy the complete logical frame into VRAM first. */
+		dstW = 256;
+		dstH = 256;
+		clipX = 0;
+		clipY = 0;
+		clipW = 256;
+		clipH = 256;
+#endif
 	}
 
-	/* DoJa v42 native viewport: never resample the game frame.
-	 * The Java bridge positions the 240x240 canvas at X=8, Y=-24,
-	 * so the DS shows a centered 240x192 window with original pixels. */
+	/* DoJa v46 JAM-driven hardware viewport: copy the game frame once at
+	 * its native canvas coordinates.  NDS BG3 affine registers perform the
+	 * final aspect-preserving resize; this blitter never resamples pixels. */
 	//check the alpha channel exists
 	hasAlpha = 1;
 	if (alpha < 0xF) { // == NULL
@@ -666,7 +681,7 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 		}
 		
 		j2 = srcY;
-		// v42 FF4A fast path: combine source transparency with one global
+		// v46 FF4A fast path: combine source transparency with one global
 		// alpha directly in ARM code. Java no longer allocates/rebuilds an
 		// ARGB image each time Image.setAlpha() changes during fades.
 		if (globalAlphaMode) {

@@ -7,13 +7,28 @@ import java.io.InputStream;
 import java.util.Hashtable;
 
 /**
- * Small ZIP/JAR inflater for DoJa resource bundles.
+ * Small ZIP/JAR reader for DoJa resource bundles.
  *
- * Supports STORED and raw-DEFLATE entries, including ZIPs whose local headers
- * use data descriptors (bit 3).  DoJa games commonly keep such one-entry JARs
- * in ScratchPad, so relying only on local-header sizes is not sufficient.
+ * v46 is optimized for FF4A's repacked one-entry STORED bundles. STORED
+ * entries keep a slice of the already-read ZIP array instead of allocating
+ * and copying a second full payload. DEFLATE remains available for generic
+ * games and older packages.
  */
 public final class JarInflater {
+    private static final boolean STORED_ZERO_COPY = true;
+
+    private static final class Entry {
+        final byte[] data;
+        final int offset;
+        final int length;
+
+        Entry(byte[] data, int offset, int length) {
+            this.data = data;
+            this.offset = offset;
+            this.length = length;
+        }
+    }
+
     private final Hashtable entries = new Hashtable();
     private boolean closed;
 
@@ -28,14 +43,15 @@ public final class JarInflater {
 
     public InputStream getInputStream(String name) {
         checkOpen();
-        byte[] data = (byte[])entries.get(name);
-        return data == null ? null : new ByteArrayInputStream(data);
+        Entry entry = (Entry)entries.get(name);
+        return entry == null ? null :
+            new ByteArrayInputStream(entry.data, entry.offset, entry.length);
     }
 
     public long getSize(String name) {
         checkOpen();
-        byte[] data = (byte[])entries.get(name);
-        return data == null ? -1L : (long)data.length;
+        Entry entry = (Entry)entries.get(name);
+        return entry == null ? -1L : (long)entry.length;
     }
 
     public void close() {
@@ -81,24 +97,52 @@ public final class JarInflater {
             if (dataOffset < 0 || compressed < 0 || dataOffset + compressed > zip.length) {
                 throw new IllegalArgumentException("truncated zip entry");
             }
-            byte[] data;
+            Entry entry;
             if (method == 0) {
-                data = new byte[uncompressed];
-                int copy = compressed < uncompressed ? compressed : uncompressed;
-                System.arraycopy(zip, dataOffset, data, 0, copy);
+                if (compressed != uncompressed) {
+                    throw new IllegalArgumentException("bad stored entry");
+                }
+                // v46 STORED_ZERO_COPY: retain a slice of the ZIP backing array.
+                entry = new Entry(zip, dataOffset, uncompressed);
             } else if (method == 8) {
-                data = RawInflater.inflate(zip, dataOffset, compressed, uncompressed);
+                byte[] data = RawInflater.inflate(zip, dataOffset, compressed, uncompressed);
+                entry = new Entry(data, 0, data.length);
             } else {
                 throw new IllegalArgumentException("unsupported zip method");
             }
-            entries.put(name, data);
+            entries.put(name, entry);
             p += 46 + nameLength + extraLength + commentLength;
         }
     }
 
     private static byte[] readAll(InputStream input) throws IOException {
+        // ScratchpadInputStream reports its exact segment length. Allocate once
+        // and fill it directly, avoiding ByteArrayOutputStream growth and the
+        // extra full-size copy performed by toByteArray().
+        int expected = input.available();
+        if (expected > 0) {
+            byte[] exact = new byte[expected];
+            int position = 0;
+            while (position < expected) {
+                int count = input.read(exact, position, expected - position);
+                if (count < 0) break;
+                if (count == 0) continue;
+                position += count;
+            }
+            if (position == expected) return exact;
+
+            ByteArrayOutputStream partial = new ByteArrayOutputStream(expected + 16384);
+            if (position > 0) partial.write(exact, 0, position);
+            byte[] buffer = new byte[16384];
+            int n;
+            while ((n = input.read(buffer)) >= 0) {
+                if (n > 0) partial.write(buffer, 0, n);
+            }
+            return partial.toByteArray();
+        }
+
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
+        byte[] buffer = new byte[16384];
         int n;
         while ((n = input.read(buffer)) >= 0) {
             if (n > 0) out.write(buffer, 0, n);

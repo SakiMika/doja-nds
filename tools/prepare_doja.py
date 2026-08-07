@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import re
 import shutil
@@ -11,16 +12,17 @@ import struct
 import subprocess
 import sys
 import zipfile
+import zlib
 from pathlib import Path
 
 from fontgen import generate_font
 from cp932gen import generate_cp932_table
 from segment_stream_patch import patch_segment_streams, segment_stream_patch_counts
 
-PORT_VERSION = 42
-PORT_TAG = "v42"
-PORT_NAME = "DoJa NDS Port v42"
-PREPARED_MARKER = "prepared_v42.ok"
+PORT_VERSION = 48
+PORT_TAG = "v48"
+PORT_NAME = "DoJa v48 Empty"
+PREPARED_MARKER = "prepared_v48.ok"
 
 
 def parse_jam(path: Path) -> dict[str, str]:
@@ -42,6 +44,76 @@ def parse_jam(path: Path) -> dict[str, str]:
         values[key.strip()] = value.strip()
     return values
 
+
+def _jam_int(jam: dict[str, str], key: str, default: int) -> int:
+    raw = jam.get(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip(), 0)
+    except ValueError as exc:
+        raise ValueError('Invalid integer in JAM field %s: %r' % (key, raw)) from exc
+
+
+def resolve_video_config(jam: dict[str, str], cli_x: int | None, cli_y: int | None) -> dict[str, int | str]:
+    """Resolve custom NDS viewport fields carried by the JAM file.
+
+    Unknown JAM keys are ignored by real DoJa handsets, so the original game
+    remains usable while this port can select an NDS affine-background mode.
+    """
+    mode = jam.get('NDSScaleMode', 'native').strip().lower() or 'native'
+    canvas_w = _jam_int(jam, 'NDSCanvasWidth', 240)
+    canvas_h = _jam_int(jam, 'NDSCanvasHeight', 240)
+    logical_w = _jam_int(jam, 'NDSLogicalWidth', canvas_w)
+    logical_h = _jam_int(jam, 'NDSLogicalHeight', canvas_h)
+    if canvas_w <= 0 or canvas_h <= 0 or canvas_w > 256 or canvas_h > 256:
+        raise ValueError('NDS physical canvas must be within 1..256 pixels.')
+    if logical_w <= 0 or logical_h <= 0 or logical_w > 256 or logical_h > 256:
+        raise ValueError('NDS logical canvas must be within 1..256 pixels.')
+
+    if mode in ('affine-fit', 'hardware-fit', 'fit', 'affine-stretch', 'stretch'):
+        mode = 'affine-stretch' if mode in ('affine-stretch', 'stretch') else 'affine-fit'
+        output_w = _jam_int(jam, 'NDSOutputWidth', min(256, logical_w))
+        output_h = _jam_int(jam, 'NDSOutputHeight', min(192, logical_h))
+        if output_w <= 0 or output_h <= 0 or output_w > 256 or output_h > 192:
+            raise ValueError('NDS output must be within 1..256 x 1..192 pixels.')
+        output_x = _jam_int(jam, 'NDSOutputX', (256 - output_w) // 2)
+        output_y = _jam_int(jam, 'NDSOutputY', (192 - output_h) // 2)
+        source_x = _jam_int(jam, 'NDSSourceX', (256 - logical_w) // 2)
+        source_y = _jam_int(jam, 'NDSSourceY', (256 - logical_h) // 2)
+        if cli_x is not None:
+            source_x = cli_x
+        if cli_y is not None:
+            source_y = cli_y
+        pa = max(1, (logical_w * 256 + output_w // 2) // output_w)
+        pd = max(1, (logical_h * 256 + output_h // 2) // output_h)
+        bg_x = source_x * 256 - output_x * pa
+        bg_y = source_y * 256 - output_y * pd
+        hardware = 1
+    elif mode in ('native', 'crop', 'none'):
+        mode = 'native'
+        source_x = _jam_int(jam, 'NDSSourceX', 8) if cli_x is None else cli_x
+        source_y = _jam_int(jam, 'NDSSourceY', -24) if cli_y is None else cli_y
+        output_x, output_y = 0, 0
+        output_w, output_h = 256, 192
+        pa = pd = 256
+        bg_x = bg_y = 0
+        hardware = 0
+    else:
+        raise ValueError('Unsupported NDSScaleMode: ' + mode)
+
+    for value, name in ((source_x, 'NDSSourceX'), (source_y, 'NDSSourceY')):
+        if value < -256 or value > 256:
+            raise ValueError('%s must be between -256 and 256.' % name)
+    return {
+        'mode': mode, 'canvas_w': canvas_w, 'canvas_h': canvas_h,
+        'logical_w': logical_w, 'logical_h': logical_h,
+        'source_x': source_x, 'source_y': source_y,
+        'output_x': output_x, 'output_y': output_y,
+        'output_w': output_w, 'output_h': output_h,
+        'pa': pa, 'pd': pd, 'bg_x': bg_x, 'bg_y': bg_y,
+        'hardware': hardware,
+    }
 
 
 DOJAEMU_SP_HEADER_BYTES = 64
@@ -159,6 +231,34 @@ _FF4A_PERIODIC_GC = bytes.fromhex('10 4b 70 9a 00 06 b8 01 fb')
 _FF4A_PERIODIC_GC_PATCHED = bytes.fromhex('10 4b 70 9a 00 06 00 00 00')
 _FF4A_PERIODIC_PHONE = bytes.fromhex('10 1e 70 9a 00 08 03 04 b8 02 43')
 _FF4A_PERIODIC_PHONE_PATCHED = bytes.fromhex('10 1e 70 9a 00 08 00 00 00 00 00')
+# Dead timestamp result at the top of every frame: currentTimeMillis(); pop2.
+_FF4A_DEAD_CLOCK = bytes.fromhex('b8 01 d7 58 b2 00 b6 10 4b 70 9a 00 06')
+_FF4A_DEAD_CLOCK_PATCHED = bytes.fromhex('00 00 00 00 b2 00 b6 10 4b 70 9a 00 06')
+# Thread.yield() immediately before the real frame-deadline calculation. The
+# following sleep already yields to the KVM scheduler/VBlank path.
+_FF4A_FRAME_YIELD = bytes.fromhex('b8 02 5d b2 00 8a b8 01 d7 65')
+_FF4A_FRAME_YIELD_PATCHED = bytes.fromhex('00 00 00 b2 00 8a b8 01 d7 65')
+_FF4A_ALL_GC_CALL = bytes.fromhex('b8 01 fb')
+_FF4A_ALL_GC_NOP = bytes.fromhex('00 00 00')
+
+# FF4A v46 logical-canvas patch. The NDS/MIDP surface reports 256x192, but
+# FF4A was authored for a 240x240 DoJa framebuffer. Replace the four
+# getWidth()/getHeight() calls in m.<init> with literal 240 values. The
+# compatibility Canvas then allocates a 240x240 backing image while BG3
+# stretches that image to the physical 256x192 screen. Class length and all
+# branch targets remain unchanged.
+_FF4A_CANVAS_CTOR = bytes.fromhex(
+    '2a b6 02 0c 11 00 f0 64 05 6c '
+    '2a b6 02 04 11 00 f0 64 05 6c b8 01 71 '
+    'b2 00 5b 2a b6 02 0c 2a b6 02 04 b8 01 72 '
+    '05 11 00 f0 11 00 f0 b8 01 73'
+)
+_FF4A_CANVAS_CTOR_PATCHED = bytes.fromhex(
+    '11 00 f0 00 11 00 f0 64 05 6c '
+    '11 00 f0 00 11 00 f0 64 05 6c b8 01 71 '
+    'b2 00 5b 11 00 f0 00 11 00 f0 00 b8 01 72 '
+    '05 11 00 f0 11 00 f0 b8 01 73'
+)
 
 def patch_ff4a_performance(name: str, payload: bytes, app_class: str) -> tuple[bytes, list[str]]:
     normalized = name.replace('\\', '/')
@@ -182,6 +282,38 @@ def patch_ff4a_performance(name: str, payload: bytes, app_class: str) -> tuple[b
         tags.append('ff4a-periodic-phone-attribute-already-removed')
     else:
         raise RuntimeError('FF4A periodic PhoneSystem signature changed/ambiguous')
+
+    if data.count(_FF4A_DEAD_CLOCK) == 1:
+        data = data.replace(_FF4A_DEAD_CLOCK, _FF4A_DEAD_CLOCK_PATCHED, 1)
+        tags.append('ff4a-dead-frame-clock-removed')
+    elif data.count(_FF4A_DEAD_CLOCK_PATCHED) == 1:
+        tags.append('ff4a-dead-frame-clock-already-removed')
+    else:
+        raise RuntimeError('FF4A dead frame clock signature changed/ambiguous')
+
+    if data.count(_FF4A_FRAME_YIELD) == 1:
+        data = data.replace(_FF4A_FRAME_YIELD, _FF4A_FRAME_YIELD_PATCHED, 1)
+        tags.append('ff4a-redundant-frame-yield-removed')
+    elif data.count(_FF4A_FRAME_YIELD_PATCHED) == 1:
+        tags.append('ff4a-redundant-frame-yield-already-removed')
+    else:
+        raise RuntimeError('FF4A frame yield signature changed/ambiguous')
+
+    if data.count(_FF4A_CANVAS_CTOR) == 1:
+        data = data.replace(_FF4A_CANVAS_CTOR, _FF4A_CANVAS_CTOR_PATCHED, 1)
+        tags.append('ff4a-logical-canvas-240x240-decoupled-from-physical-screen')
+    elif data.count(_FF4A_CANVAS_CTOR_PATCHED) == 1:
+        tags.append('ff4a-logical-canvas-already-decoupled')
+    else:
+        raise RuntimeError('FF4A canvas constructor signature changed/ambiguous')
+
+    # v46: remove every remaining explicit System.gc() in FF4A. The KVM
+    # allocator still performs GC automatically on allocation pressure, but
+    # scene/resource transitions no longer force full-heap scans.
+    remaining_gc = data.count(_FF4A_ALL_GC_CALL)
+    if remaining_gc:
+        data = data.replace(_FF4A_ALL_GC_CALL, _FF4A_ALL_GC_NOP)
+        tags.append('ff4a-all-explicit-full-gc-removed=%d' % remaining_gc)
     return data, tags
 
 
@@ -274,6 +406,279 @@ def c_escape(value: str) -> str:
             .replace('\r', '\\r').replace('\n', '\\n').replace('\t', '\\t'))
 
 
+
+def _zip_stored_single(payload: bytes) -> bytes:
+    """Build a deterministic one-entry ZIP using method STORED."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_STORED,
+                         allowZip64=False) as archive:
+        info = zipfile.ZipInfo('0', date_time=(1980, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_STORED
+        info.create_system = 0
+        info.external_attr = 0
+        archive.writestr(info, payload)
+    return buffer.getvalue()
+
+
+def repack_ff4a_scratchpad_stored(source: Path, output: Path) -> dict[str, int]:
+    """Repack FF4A's 14 nested resource JARs as contiguous STORED ZIPs.
+
+    FF4A keeps a 65-record index in the final resource pack. Each record holds
+    the pack offset/length plus the offset/length of the requested resource in
+    the uncompressed pack payload. Repacking therefore requires rebuilding all
+    packs and rewriting every pack offset/length in that index.
+    """
+    data = bytearray(source.read_bytes())
+    base = 25600
+    if len(data) < base + 20:
+        raise RuntimeError('FF4A ScratchPad is too small')
+
+    old_total = struct.unpack_from('>I', data, base + 8)[0]
+    index_rel = struct.unpack_from('>I', data, base + 12)[0]
+    index_len = struct.unpack_from('>I', data, base + 16)[0]
+    if old_total <= 20 or base + old_total > len(data):
+        raise RuntimeError('FF4A ScratchPad resource span is invalid')
+    if index_rel < 20 or index_len <= 0 or index_rel + index_len > old_total:
+        raise RuntimeError('FF4A ScratchPad index pack is invalid')
+
+    def read_single_pack(rel: int, length: int) -> bytes:
+        blob = bytes(data[base + rel:base + rel + length])
+        try:
+            with zipfile.ZipFile(io.BytesIO(blob), 'r') as archive:
+                infos = archive.infolist()
+                if len(infos) != 1 or infos[0].filename != '0':
+                    raise RuntimeError('FF4A pack is not a one-entry JAR')
+                return archive.read('0')
+        except zipfile.BadZipFile as exc:
+            raise RuntimeError('Invalid FF4A nested resource JAR') from exc
+
+    index_payload = bytearray(read_single_pack(index_rel, index_len))
+    if len(index_payload) < 4:
+        raise RuntimeError('FF4A resource index is truncated')
+    record_count = struct.unpack_from('<I', index_payload, 0)[0]
+    if record_count != 65 or 4 + record_count * 24 > len(index_payload):
+        raise RuntimeError('Unexpected FF4A resource index layout')
+
+    old_packs: set[tuple[int, int]] = set()
+    records: list[tuple[int, int, int, int, int, int]] = []
+    for i in range(record_count):
+        offset = 4 + i * 24
+        record = struct.unpack_from('<6I', index_payload, offset)
+        records.append(record)
+        old_packs.add((record[2], record[3]))
+    old_packs.add((index_rel, index_len))
+    ordered = sorted(old_packs)
+    if len(ordered) != 14 or ordered[0][0] != 20:
+        raise RuntimeError('Expected exactly 14 contiguous FF4A resource packs')
+
+    payloads: dict[tuple[int, int], bytes] = {}
+    old_end = 20
+    old_compressed = 0
+    total_uncompressed = 0
+    for key in ordered:
+        rel, length = key
+        if rel != old_end:
+            raise RuntimeError('FF4A resource packs are not contiguous')
+        payload = read_single_pack(rel, length)
+        payloads[key] = payload
+        old_end += length
+        old_compressed += length
+        total_uncompressed += len(payload)
+    if old_end > old_total:
+        raise RuntimeError('FF4A resource packs exceed declared resource span')
+
+    stored_blobs = {key: _zip_stored_single(payload) for key, payload in payloads.items()}
+    mapping: dict[tuple[int, int], tuple[int, int]] = {}
+    cursor = 20
+    for key in ordered:
+        blob = stored_blobs[key]
+        mapping[key] = (cursor, len(blob))
+        cursor += len(blob)
+
+    # Rewrite every resource record to the new pack location. The resource
+    # offset/length inside the uncompressed payload does not change.
+    for i, record in enumerate(records):
+        name_offset, name_length, pack_rel, pack_len, entry_offset, entry_len = record
+        new_rel, new_len = mapping[(pack_rel, pack_len)]
+        struct.pack_into('<6I', index_payload, 4 + i * 24,
+                         name_offset, name_length, new_rel, new_len,
+                         entry_offset, entry_len)
+
+    index_key = (index_rel, index_len)
+    rebuilt_index = _zip_stored_single(bytes(index_payload))
+    expected_index_len = mapping[index_key][1]
+    if len(rebuilt_index) != expected_index_len:
+        raise RuntimeError('FF4A STORED index pack length changed unexpectedly')
+    stored_blobs[index_key] = rebuilt_index
+    payloads[index_key] = bytes(index_payload)
+
+    # The header stores an aligned resource-span length. Keep the original
+    # post-resource save area, but move it after the larger STORED pack region.
+    new_end = cursor
+    new_total = (new_end + 63) & ~63
+    trailing = bytes(data[base + old_total:])
+    result = bytearray(data[:base + 20])
+    for key in ordered:
+        result.extend(stored_blobs[key])
+    if len(result) != base + new_end:
+        raise RuntimeError('FF4A STORED pack assembly length mismatch')
+    result.extend(b'\x00' * (base + new_total - len(result)))
+    result.extend(trailing)
+
+    new_index_rel, new_index_len = mapping[index_key]
+    struct.pack_into('>I', result, base + 8, new_total)
+    struct.pack_into('>I', result, base + 12, new_index_rel)
+    struct.pack_into('>I', result, base + 16, new_index_len)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(result)
+
+    # Full integrity pass: all packs must be STORED, and all indexed resource
+    # slices must remain byte-for-byte identical to the original payloads.
+    for key in ordered:
+        new_rel, new_len = mapping[key]
+        blob = bytes(result[base + new_rel:base + new_rel + new_len])
+        with zipfile.ZipFile(io.BytesIO(blob), 'r') as archive:
+            infos = archive.infolist()
+            if len(infos) != 1 or infos[0].compress_type != zipfile.ZIP_STORED:
+                raise RuntimeError('FF4A pack was not converted to STORED')
+            if archive.read('0') != payloads[key]:
+                raise RuntimeError('FF4A STORED pack payload mismatch')
+
+    saved_inflate = total_uncompressed - old_compressed
+    print('[DoJa] FF4A STORED packs: 14/14')
+    print('[DoJa] FF4A pack bytes   : compressed=%d stored=%d payload=%d' %
+          (old_compressed, new_end - 20, total_uncompressed))
+    print('[DoJa] FF4A SP size      : %d -> %d bytes' % (len(data), len(result)))
+    print('[DoJa] FF4A Java inflate : eliminated for all resource packs')
+    return {
+        'pack_count': len(ordered),
+        'record_count': record_count,
+        'old_size': len(data),
+        'new_size': len(result),
+        'old_pack_bytes': old_compressed,
+        'new_pack_bytes': new_end - 20,
+        'payload_bytes': total_uncompressed,
+        'inflate_bytes_eliminated': saved_inflate,
+    }
+
+
+LZ77_WRAPPER = struct.Struct('<4sIIII')
+LZ77_MAGIC = b'D7SP'
+LZ77_VERSION = 1
+
+
+def encode_nintendo_lz77(data: bytes) -> bytes:
+    """Encode a Nintendo/GBA/NDS LZ77 (type 0x10) stream.
+
+    The encoder is self-contained so build-doja.bat needs only Python 3. It
+    uses a bounded 4 KiB search window and the standard 3..18 byte matches.
+    """
+    size = len(data)
+    if size >= (1 << 24):
+        raise ValueError('Nintendo LZ77 supports ScratchPads smaller than 16 MiB.')
+    out = bytearray((0x10, size & 0xFF, (size >> 8) & 0xFF, (size >> 16) & 0xFF))
+    chains: dict[int, list[int]] = {}
+    pos = 0
+
+    def key_at(index: int) -> int:
+        return data[index] | (data[index + 1] << 8) | (data[index + 2] << 16)
+
+    def remember(index: int) -> None:
+        if index + 2 >= size:
+            return
+        key = key_at(index)
+        chain = chains.setdefault(key, [])
+        chain.append(index)
+        # Keep recent candidates only. This bounds preparation time while
+        # preserving excellent compression for game resource packs.
+        if len(chain) > 128:
+            del chain[:-64]
+
+    while pos < size:
+        flag_offset = len(out)
+        out.append(0)
+        flags = 0
+        for bit in range(8):
+            if pos >= size:
+                break
+            best_length = 0
+            best_distance = 0
+            if pos + 2 < size:
+                key = key_at(pos)
+                chain = chains.get(key, ())
+                window_start = max(0, pos - 4096)
+                for candidate in reversed(chain[-64:]):
+                    if candidate < window_start:
+                        break
+                    maximum = min(18, size - pos)
+                    length = 3
+                    while length < maximum and data[candidate + length] == data[pos + length]:
+                        length += 1
+                    if length > best_length:
+                        best_length = length
+                        best_distance = pos - candidate
+                        if length == 18:
+                            break
+            if best_length >= 3:
+                flags |= 1 << (7 - bit)
+                displacement = best_distance - 1
+                encoded_length = best_length - 3
+                out.append((encoded_length << 4) | ((displacement >> 8) & 0x0F))
+                out.append(displacement & 0xFF)
+                end = pos + best_length
+                while pos < end:
+                    remember(pos)
+                    pos += 1
+            else:
+                out.append(data[pos])
+                remember(pos)
+                pos += 1
+        out[flag_offset] = flags
+
+    # objcopy/linking is happier with word-aligned binary resources. The
+    # decoder stops after the declared uncompressed size and ignores padding.
+    while len(out) & 3:
+        out.append(0)
+    return bytes(out)
+
+
+def write_lz77_scratchpad(raw: bytes, output: Path) -> tuple[int, int, int]:
+    packed = encode_nintendo_lz77(raw)
+    crc = zlib.crc32(raw) & 0xFFFFFFFF
+    wrapper = LZ77_WRAPPER.pack(LZ77_MAGIC, LZ77_VERSION, len(raw), len(packed), crc) + packed
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(wrapper)
+    ratio = (100.0 * len(packed) / len(raw)) if raw else 0.0
+    print('[DoJa] LZ77 pack  : %d -> %d bytes (%.1f%%)' % (len(raw), len(packed), ratio))
+    print('[DoJa] LZ77 file  :', output, len(wrapper), 'bytes')
+    return len(packed), len(wrapper), crc
+
+
+def write_prepared_jam(path: Path, jam: dict[str, str], raw_size: int) -> None:
+    values = dict(jam)
+    values['SPsize'] = str(raw_size)
+    values['DoJaPortBuild'] = 'v48-empty'
+    values['NDSOuterCompression'] = 'LZ77'
+    preferred = [
+        'AppName', 'AppVer', 'PackageURL', 'AppSize', 'AppClass', 'AppParam',
+        'SPsize', 'ProfileVer', 'ConfigurationVer', 'DoJaPortBuild',
+        'NDSOuterCompression', 'NDSScaleMode', 'NDSCanvasWidth',
+        'NDSCanvasHeight', 'NDSLogicalWidth', 'NDSLogicalHeight',
+        'NDSOutputX', 'NDSOutputY', 'NDSOutputWidth', 'NDSOutputHeight',
+    ]
+    lines = []
+    used = set()
+    for key in preferred:
+        if key in values:
+            lines.append(f'{key} = {values[key]}')
+            used.add(key)
+    for key in sorted(values):
+        if key not in used:
+            lines.append(f'{key} = {values[key]}')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('\r\n'.join(lines) + '\r\n', encoding='utf-8')
+
 def patch_class_version(path: Path) -> None:
     data = bytearray(path.read_bytes())
     if len(data) < 8 or data[:4] != b'\xca\xfe\xba\xbe':
@@ -350,9 +755,14 @@ def merge_jar(original: Path, class_dir: Path, font_bin: Path, cp932_bin: Path,
         'MicroEdition-Profile: DoJa-3.5\r\n'
         'DoJa-App-Class: ' + app_class + '\r\n'
         'DoJa-Port-Version: ' + str(PORT_VERSION) + '\r\n'
-        'DoJa-FF4A-Optimized: ' + ('1' if app_class == 'FF4A' else '0') + '\r\n\r\n'
+        'DoJa-FF4A-Optimized: ' + ('1' if app_class == 'FF4A' else '0') + '\r\n'
+        'DoJa-FF4A-Bytecode-Profile: ' + ('v48-stored-lz77' if app_class == 'FF4A' else 'none') + '\r\n'
+        'DoJa-Physical-Canvas: 256x192\r\n'
+        'DoJa-Logical-Canvas: 240x240\r\n\r\n'
     ).encode('utf-8')
-    with zipfile.ZipFile(original, 'r') as source, zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED, 9) as dest:
+    jar_method = zipfile.ZIP_STORED
+    jar_level = None
+    with zipfile.ZipFile(original, 'r') as source, zipfile.ZipFile(output, 'w', jar_method, compresslevel=jar_level) as dest:
         written: set[str] = set()
         for info in source.infolist():
             name = info.filename.replace('\\', '/')
@@ -375,7 +785,7 @@ def merge_jar(original: Path, class_dir: Path, font_bin: Path, cp932_bin: Path,
             if name in written:
                 raise RuntimeError('Compatibility class collides with game JAR: ' + name)
             dest.write(class_file, name)
-        # v42: ScratchPad is linked separately as native ROM data.  Do not put
+        # v46: ScratchPad is linked separately as native ROM data.  Do not put
         # the full ScratchPad payload in the JAR, because KVM inflates whole JAR
         # resources into its heap before ResourceInputStream can read them.
         dest.write(font_bin, 'doja/jpfont.bin')
@@ -392,11 +802,17 @@ def verify_ff4a_performance_jar(jar_path: Path, app_class: str) -> None:
     if _FF4A_PERIODIC_GC in payload or _FF4A_PERIODIC_PHONE in payload:
         raise RuntimeError('FF4A hot-loop patch was not applied')
     if payload.count(_FF4A_PERIODIC_GC_PATCHED) != 1 or \
-            payload.count(_FF4A_PERIODIC_PHONE_PATCHED) != 1:
+            payload.count(_FF4A_PERIODIC_PHONE_PATCHED) != 1 or \
+            payload.count(_FF4A_DEAD_CLOCK_PATCHED) != 1 or \
+            payload.count(_FF4A_FRAME_YIELD_PATCHED) != 1:
         raise RuntimeError('FF4A hot-loop patch verification is ambiguous')
-    print('[DoJa] FF4A optimization: periodic full GC + redundant phone attribute removed')
+    if (_FF4A_DEAD_CLOCK in payload or _FF4A_FRAME_YIELD in payload):
+        raise RuntimeError('FF4A v46 frame-loop bytecode patch was not applied')
+    if _FF4A_ALL_GC_CALL in payload:
+        raise RuntimeError('FF4A still contains explicit System.gc bytecode')
+    print('[DoJa] FF4A bytecode: all explicit GC + phone + dead clock + redundant yield removed')
 
-def verify_doja_v42_api(jar_path: Path) -> None:
+def verify_doja_v46_api(jar_path: Path) -> None:
     """Verify generic DoJa image/3D/archive classes needed by FF4A-class titles."""
     required = (
         'com/nttdocomo/ui/Palette.class',
@@ -423,7 +839,7 @@ def verify_doja_v42_api(jar_path: Path) -> None:
         names = set(archive.namelist())
         missing = [name for name in required if name not in names]
         if missing:
-            raise RuntimeError('Missing v42 DoJa API class: ' + ', '.join(missing))
+            raise RuntimeError('Missing v46 DoJa API class: ' + ', '.join(missing))
         paletted = archive.read('com/nttdocomo/ui/PalettedImage.class')
         graphics = archive.read('com/nttdocomo/ui/Graphics.class')
         inflater = archive.read('com/nttdocomo/util/JarInflater.class')
@@ -433,7 +849,7 @@ def verify_doja_v42_api(jar_path: Path) -> None:
         if not all(token in paletted for token in (b'createPalettedImage', b'getPalette', b'setTransparentIndex')):
             raise RuntimeError('PalettedImage.class is stale')
         if not all(token in graphics for token in (b'Graphics3D', b'setFlipMode', b'getPixels', b'setPixels')):
-            raise RuntimeError('Graphics.class lacks v42 DoJa image/3D API')
+            raise RuntimeError('Graphics.class lacks v46 DoJa image/3D API')
         if not all(token in inflater for token in (b'getInputStream', b'getSize', b'missing zip directory')):
             raise RuntimeError('JarInflater.class is stale')
         if not all(token in raw_inflater for token in (
@@ -443,7 +859,7 @@ def verify_doja_v42_api(jar_path: Path) -> None:
             raise RuntimeError('FastPath.class is stale')
         if not all(token in fast_blit for token in (b'Video', b'blit', b'drawImageAlpha')):
             raise RuntimeError('DoJaFastBlit.class is stale')
-    print('[DoJa] v42 API verify: FF4A fast bridge + palette/graphics3d/JAR inflater')
+    print('[DoJa] v46 API verify: FF4A fast bridge + palette/graphics3d/JAR inflater')
 
 
 def verify_cp932_jar(jar_path: Path) -> None:
@@ -459,19 +875,19 @@ def verify_cp932_jar(jar_path: Path) -> None:
         )
         for name in required:
             if name not in names:
-                raise RuntimeError('Missing v42 SJIS runtime entry: ' + name)
+                raise RuntimeError('Missing v46 SJIS runtime entry: ' + name)
         table = archive.read('doja/cp932.tbl')
         bitmap_font_class = archive.read('nds/doja/font/BitmapJapaneseFont.class')
         if b'isNonPrintingControl' not in bitmap_font_class:
-            raise RuntimeError('Missing v42 NUL/control padding font fix')
+            raise RuntimeError('Missing v46 NUL/control padding font fix')
     if len(table) < 12 or table[:4] != b'DJC2':
-        raise RuntimeError('Invalid v42 CP932 mapping resource')
+        raise RuntimeError('Invalid v46 CP932 mapping resource')
     version, single_count, double_count, reverse_count = struct.unpack_from('>HHHH', table, 4)
     expected = 12 + single_count * 2 + double_count * 2 + reverse_count * 4
     if version != 1 or single_count != 256 or double_count != 11280:
-        raise RuntimeError('Unexpected v42 CP932 table dimensions')
+        raise RuntimeError('Unexpected v46 CP932 table dimensions')
     if reverse_count < 9000 or len(table) != expected:
-        raise RuntimeError('Truncated v42 CP932 reverse map')
+        raise RuntimeError('Truncated v46 CP932 reverse map')
     print('[DoJa] SJIS verify: default=SJIS decode=%d encode=%d table=%d' % (
         single_count + double_count, reverse_count, len(table)))
 
@@ -483,7 +899,7 @@ def verify_offline_jar(jar_path: Path) -> None:
     with zipfile.ZipFile(jar_path, 'r') as archive:
         names = set(archive.namelist())
         if 'doja/scratchpad.bin' in names:
-            raise RuntimeError('v42 game.jar must not contain doja/scratchpad.bin')
+            raise RuntimeError('v46 game.jar must not contain doja/scratchpad.bin')
         print('[DoJa] Native SP verify: JAR entry absent')
         try:
             data = archive.read('j.class')
@@ -532,7 +948,7 @@ def verify_offline_jar(jar_path: Path) -> None:
     print('[DoJa] Segment stream verify: patched=%d legacy=%d' % (
         stream_count, legacy_stream_count))
     if stream_count != 13 or legacy_stream_count != 0:
-        raise RuntimeError('Final embedded/game.jar is missing the v42 zero-copy segment patch')
+        raise RuntimeError('Final embedded/game.jar is missing the v46 zero-copy segment patch')
 
 
 
@@ -578,7 +994,7 @@ def _class_super_name(data: bytes) -> str:
 
 
 def verify_direct_scratchpad_jar(jar_path: Path) -> None:
-    """Verify v42's separate top-level connection and input stream."""
+    """Verify v46's separate top-level connection and input stream."""
     with zipfile.ZipFile(jar_path, 'r') as archive:
         names = set(archive.namelist())
         try:
@@ -591,7 +1007,7 @@ def verify_direct_scratchpad_jar(jar_path: Path) -> None:
                 'com/sun/cldc/io/j2me/scratchpad/ScratchpadByteArrayInputStream.class')
             http = archive.read('com/sun/cldc/io/j2me/http/Protocol.class')
         except KeyError as exc:
-            raise RuntimeError('Missing v42 ScratchPad zero-copy classes') from exc
+            raise RuntimeError('Missing v46 ScratchPad zero-copy classes') from exc
 
     scratchpad_classes = sorted(
         name for name in names
@@ -632,12 +1048,13 @@ def verify_direct_scratchpad_jar(jar_path: Path) -> None:
     if (not has_native or not creates_separate_stream or
             not segment_patch_classes or nested_present or
             legacy or not http_direct or not lifecycle_ok):
-        raise RuntimeError('v42 ScratchPad segment-stream verification failed')
+        raise RuntimeError('v46 ScratchPad segment-stream verification failed')
 
 def write_metadata(project: Path, jam: dict[str, str], app_name: str, app_class: str,
                    app_param: str, rom_code: str, output_stem: str,
                    scratchpad_crc32: int, scratchpad_size: int,
-                   screen_x: int, screen_y: int,
+                   packed_size: int, wrapper_size: int,
+                   video: dict[str, int | str],
                    corpse_party_compat: bool) -> None:
     props = [
         ('Manifest-Version', '1.0'),
@@ -647,7 +1064,14 @@ def write_metadata(project: Path, jam: dict[str, str], app_name: str, app_class:
         ('DoJa-App-Class', app_class),
         ('DoJa-App-Param', app_param),
         ('DoJa-Port-Version', str(PORT_VERSION)),
+        ('DoJa-Source-Edition', 'Empty'),
         ('DoJa-Compat-Corpse-Party', '1' if corpse_party_compat else '0'),
+        ('NDS-Outer-Compression', 'LZ77'),
+        ('NDS-Scale-Mode', str(video['mode'])),
+        ('NDS-Canvas-Size', '%dx%d' % (video['canvas_w'], video['canvas_h'])),
+        ('NDS-Logical-Canvas-Size', '%dx%d' % (video['logical_w'], video['logical_h'])),
+        ('NDS-Output-Rect', '%d,%d,%d,%d' % (video['output_x'], video['output_y'], video['output_w'], video['output_h'])),
+        ('NDS-Bytecode-Profile', 'FF4A-v48-stored-lz77' if app_class == 'FF4A' else 'generic-v48-lz77'),
     ]
     prop_text = ''.join(k + ': ' + v + '\r\n' for k, v in props) + '\r\n'
     internal = re.sub(r'[^A-Za-z0-9]', '', output_stem).upper()[:12] or 'DOJAGAME'
@@ -656,13 +1080,27 @@ def write_metadata(project: Path, jam: dict[str, str], app_name: str, app_class:
 #define PSTROS_STANDALONE_GAME_H
 
 #define DOJA_PORT_BUILD_VERSION {PORT_VERSION}
-#define DOJA_PORT_VERSION_TEXT "{PORT_TAG}"
+#define DOJA_PORT_VERSION_TEXT "v48 Empty"
 #define STANDALONE_APP_NAME "{c_escape(app_name)}"
 #define STANDALONE_MAIN_CLASS "{c_escape(app_class)}"
 #define DOJA_APP_CLASS "{c_escape(app_class)}"
 #define DOJA_APP_PARAM "{c_escape(app_param)}"
-#define DOJA_SCREEN_X {screen_x}
-#define DOJA_SCREEN_Y {screen_y}
+#define DOJA_CANVAS_WIDTH {video['canvas_w']}
+#define DOJA_CANVAS_HEIGHT {video['canvas_h']}
+#define DOJA_LOGICAL_WIDTH {video['logical_w']}
+#define DOJA_LOGICAL_HEIGHT {video['logical_h']}
+#define DOJA_SCREEN_X {video['source_x']}
+#define DOJA_SCREEN_Y {video['source_y']}
+#define DOJA_HW_AFFINE_SCALE {video['hardware']}
+#define DOJA_OUTPUT_X {video['output_x']}
+#define DOJA_OUTPUT_Y {video['output_y']}
+#define DOJA_OUTPUT_WIDTH {video['output_w']}
+#define DOJA_OUTPUT_HEIGHT {video['output_h']}
+#define DOJA_BG_PA {video['pa']}
+#define DOJA_BG_PD {video['pd']}
+#define DOJA_BG_X {video['bg_x']}
+#define DOJA_BG_Y {video['bg_y']}
+#define DOJA_SCALE_MODE_TEXT "{video['mode']}"
 #define STANDALONE_CLASSPATH "@embedded"
 #define STANDALONE_JAR_FILENAME "game.jar"
 #define STANDALONE_NDS_GAME_CODE "####"
@@ -674,9 +1112,12 @@ def write_metadata(project: Path, jam: dict[str, str], app_name: str, app_class:
 #define STANDALONE_SAVE_PATH "fat:/" STANDALONE_OUTPUT_BASENAME ".sav"
 #define STANDALONE_RMS_SAVE_PATH "fat:/" STANDALONE_OUTPUT_BASENAME ".rms"
 #define STANDALONE_LEGACY_SAVE_PATH "fat:/{rom_code.upper()}.DJS"
-#define STANDALONE_SAVE_MODE_TEXT "SAV FILE"
+#define STANDALONE_SAVE_MODE_TEXT "RAM-FIRST SAVE"
 #define DOJA_SCRATCHPAD_SIZE {scratchpad_size}
 #define DOJA_SCRATCHPAD_CRC32 0x{scratchpad_crc32:08X}UL
+#define DOJA_SCRATCHPAD_PACKED_SIZE {packed_size}
+#define DOJA_SCRATCHPAD_WRAPPER_SIZE {wrapper_size}
+#define DOJA_SCRATCHPAD_CODEC_LZ77 1
 #define DOJA_COMPAT_CORPSE_PARTY {1 if corpse_party_compat else 0}
 #define STANDALONE_PROPERTIES_TEXT "{c_escape(prop_text)}"
 
@@ -686,7 +1127,7 @@ def write_metadata(project: Path, jam: dict[str, str], app_name: str, app_class:
     mk = f'''# Auto-generated by tools/prepare_doja.py.
 TARGET := {output_stem}
 TEXT1 := {app_name}
-TEXT2 := {PORT_NAME}
+TEXT2 := DoJa v48 Empty
 TEXT3 := {app_class}
 NDS_GAME_CODE := \\#\\#\\#\\#
 NDS_MAKER_CODE := HB
@@ -705,60 +1146,34 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def write_prepared_marker(project: Path, output_stem: str, scratchpad_size: int, corpse_party_compat: bool) -> Path:
+def write_prepared_marker(project: Path, output_stem: str, scratchpad_size: int,
+                          packed_size: int, wrapper_size: int,
+                          corpse_party_compat: bool) -> Path:
     marker = project / 'build_doja' / PREPARED_MARKER
     payload = {
         'port_version': PORT_VERSION,
         'port_tag': PORT_TAG,
+        'edition': 'empty',
+        'codec': 'Nintendo-LZ77-0x10',
         'output_stem': output_stem,
         'scratchpad_size': scratchpad_size,
+        'scratchpad_packed_size': packed_size,
+        'scratchpad_wrapper_size': wrapper_size,
         'corpse_party_compat': corpse_party_compat,
         'game_jar_sha256': sha256_file(project / 'embedded' / 'game.jar'),
-        'scratchpad_sha256': sha256_file(project / 'embedded' / 'doja_scratchpad.bin'),
-        'default_icon_sha256': sha256_file(project / 'assets' / 'default_standalone_icon.bmp'),
+        'scratchpad_lz77_sha256': sha256_file(project / 'embedded' / 'doja_scratchpad.lz7b'),
+        'generated_jam_sha256': sha256_file(project / 'build_doja' / 'prepared_game.jam'),
         'generated_icon_sha256': sha256_file(project / 'assets' / 'standalone_icon.bmp'),
         'metadata_sha256': sha256_file(project / 'standalone_game.mk'),
         'header_sha256': sha256_file(project / 'include' / 'standalone_game.h'),
-        'protocol_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'sun' / 'cldc' / 'io' / 'j2me' / 'scratchpad' / 'Protocol.java'),
-        'output_stream_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'sun' / 'cldc' / 'io' / 'j2me' / 'scratchpad' / 'ScratchpadOutputStream.java'),
-        'input_stream_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'sun' / 'cldc' / 'io' / 'j2me' / 'scratchpad' / 'ScratchpadInputStream.java'),
-        'segment_token_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'sun' / 'cldc' / 'io' / 'j2me' / 'scratchpad' / 'SegmentToken.java'),
-        'segment_stream_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'sun' / 'cldc' / 'io' / 'j2me' / 'scratchpad' / 'ScratchpadByteArrayInputStream.java'),
-        'segment_patcher_sha256': sha256_file(project / 'tools' / 'segment_stream_patch.py'),
-        'native_source_sha256': sha256_file(project / 'kvm' / 'VmCommon' / 'src' / 'native.c'),
-        'native_table_source_sha256': sha256_file(project / 'kvm' / 'VmSkel' / 'src' / 'nativeFunctionTableGBA.c'),
         'resource_source_sha256': sha256_file(project / 'kvm' / 'VmExtra' / 'src' / 'resource.c'),
         'nds_main_source_sha256': sha256_file(project / 'kvm' / 'VmSkel' / 'src' / 'nds_main.c'),
-        'nds_file_source_sha256': sha256_file(project / 'kvm' / 'VmSkel' / 'src' / 'Java_nds_File.c'),
-        'nds_runtime_source_sha256': sha256_file(project / 'kvm' / 'VmSkel' / 'src' / 'nds_runtime.c'),
-        'video_source_sha256': sha256_file(project / 'kvm' / 'VmSkel' / 'src' / 'Java_nds_Video.c'),
-        'machine_md_source_sha256': sha256_file(project / 'kvm' / 'VmSkel' / 'h' / 'machine_md.h'),
-        'collector_source_sha256': sha256_file(project / 'kvm' / 'VmCommon' / 'src' / 'collector.c'),
-        'doja_canvas_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'Canvas.java'),
-        'doja_graphics_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'Graphics.java'),
-        'doja_image_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'Image.java'),
-        'doja_palette_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'Palette.java'),
-        'doja_paletted_image_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'PalettedImage.java'),
-        'doja_indexed_gif_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'image' / 'IndexedGifDecoder.java'),
-        'doja_jar_inflater_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'util' / 'JarInflater.java'),
-        'doja_graphics3d_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'graphics3d' / 'Graphics3D.java'),
-        'doja_primitive_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'graphics3d' / 'Primitive.java'),
-        'doja_transform_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'nttdocomo' / 'ui' / 'util3d' / 'Transform.java'),
-        'doja_mainapp_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'MainApp.java'),
-        'config_stub_sha256': sha256_file(project / 'tools' / 'compile_stubs' / 'nds' / 'pstros' / 'ConfigData.java'),
-        'fontgen_source_sha256': sha256_file(project / 'tools' / 'fontgen.py'),
-        'bitmap_font_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'font' / 'BitmapJapaneseFont.java'),
-        'fast_path_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'FastPath.java'),
-        'fast_blit_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'nds' / 'pstros' / 'video' / 'DoJaFastBlit.java'),
-        'property_source_sha256': sha256_file(project / 'kvm' / 'VmCommon' / 'src' / 'property.c'),
-        'cp932gen_source_sha256': sha256_file(project / 'tools' / 'cp932gen.py'),
-        'cp932_codec_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'nds' / 'doja' / 'encoding' / 'Cp932Codec.java'),
-        'sjis_reader_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'sun' / 'cldc' / 'i18n' / 'j2me' / 'SJIS_Reader.java'),
-        'sjis_writer_source_sha256': sha256_file(project / 'doja_port' / 'doja_src' / 'com' / 'sun' / 'cldc' / 'i18n' / 'j2me' / 'SJIS_Writer.java'),
+        'makefile_sha256': sha256_file(project / 'Makefile'),
     }
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     return marker
+
 
 
 def main() -> int:
@@ -769,8 +1184,8 @@ def main() -> int:
     parser.add_argument('--rom-code', required=True)
     parser.add_argument('--font')
     parser.add_argument('--name')
-    parser.add_argument('--screen-x', type=int, default=8)
-    parser.add_argument('--screen-y', type=int, default=-24)
+    parser.add_argument('--screen-x', type=int)
+    parser.add_argument('--screen-y', type=int)
     args = parser.parse_args()
 
     project = Path(__file__).resolve().parents[1]
@@ -788,9 +1203,6 @@ def main() -> int:
     for path in (jar, jam_path, sp):
         if not path.is_file():
             raise FileNotFoundError(path)
-    if not -256 <= args.screen_x <= 256 or not -256 <= args.screen_y <= 256:
-        raise ValueError('Screen offsets must be between -256 and 256.')
-
     rom_code = re.sub(r'[^A-Za-z0-9]', '', args.rom_code).upper()
     if len(rom_code) != 4:
         raise ValueError('ROM code must contain exactly four letters/numbers.')
@@ -798,15 +1210,28 @@ def main() -> int:
     jam = parse_jam(jam_path)
     app_class = jam.get('AppClass', 'Main').strip() or 'Main'
     app_param = jam.get('AppParam', '0').strip() or '0'
+    # FF4A's handset canvas is 240x240. For this exact title, default to the
+    # full 256x192 NDS affine output requested by the project. Other games keep
+    # their JAM/native behavior unless they provide explicit NDS* fields.
+    if app_class == 'FF4A' and 'NDSScaleMode' not in jam:
+        jam.update({
+            'NDSScaleMode': 'affine-stretch',
+            'NDSCanvasWidth': '256', 'NDSCanvasHeight': '192',
+            'NDSLogicalWidth': '240', 'NDSLogicalHeight': '240',
+            'NDSSourceX': '8', 'NDSSourceY': '8',
+            'NDSOutputX': '0', 'NDSOutputY': '0',
+            'NDSOutputWidth': '256', 'NDSOutputHeight': '192',
+        })
+    video = resolve_video_config(jam, args.screen_x, args.screen_y)
     app_name = (args.name or jar.stem).strip()
-    output_stem = safe_stem(app_name) + '_doja_v42'
+    output_stem = safe_stem(app_name) + '_doja_v48'
     corpse_party_compat = detect_corpse_party_compat(jar)
     work = project / 'build_doja'
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir()
     for generated in (
         project / 'embedded' / 'game.jar',
-        project / 'embedded' / 'doja_scratchpad.bin',
+        project / 'embedded' / 'doja_scratchpad.lz7b',
         project / 'embedded' / 'osnd_native.pcm',
         project / 'standalone_game.mk',
         project / 'include' / 'standalone_game.h',
@@ -820,9 +1245,15 @@ def main() -> int:
     print('[DoJa] App class :', app_class)
     print('[DoJa] App param :', app_param)
     print('[DoJa] Profile   :', jam.get('ProfileVer', 'unknown'))
-    print('[DoJa] Viewport  : native 240x240 at X=%d Y=%d (no fit)' % (args.screen_x, args.screen_y))
+    print('[DoJa] Canvas    : physical %dx%d; logical %dx%d at VRAM X=%d Y=%d' % (video['canvas_w'], video['canvas_h'], video['logical_w'], video['logical_h'], video['source_x'], video['source_y']))
+    print('[DoJa] NDS scale : %s -> %dx%d at X=%d Y=%d (BG PA=%d PD=%d)' % (video['mode'], video['output_w'], video['output_h'], video['output_x'], video['output_y'], video['pa'], video['pd']))
     print('[DoJa] Compat    :', 'FF4A exact-signature performance build' if app_class == 'FF4A' else ('Corpse Party exact-signature patch' if corpse_party_compat else 'generic game'))
     normalized_sp, _sp_mode = normalize_scratchpad(sp, jam, work / 'scratchpad_payload.bin')
+    if app_class == 'FF4A':
+        normalized_sp = work / 'scratchpad_stored.bin'
+        stored_stats = repack_ff4a_scratchpad_stored(work / 'scratchpad_payload.bin', normalized_sp)
+        jam['SPsize'] = str(stored_stats['new_size'])
+        jam['NDSResourcePackMode'] = 'stored'
     class_dir = compile_compat(project, tool_root, work)
     font_bin = work / 'jpfont.bin'
     font_used, glyph_count = generate_font(jar, normalized_sp, font_bin, args.font)
@@ -838,24 +1269,17 @@ def main() -> int:
         single_count, double_count, reverse_count, cp932_bin.stat().st_size))
     merge_jar(jar, class_dir, font_bin, cp932_bin,
               project / 'embedded' / 'game.jar', app_name, app_class)
-    # Keep two copies of the normalized ScratchPad.  The embedded copy is linked
-    # into ARM9.  The build_doja backup is deliberately outside the Makefile
-    # build directory and lets build.bat/make restore the asset if the user
-    # overlays a new source package or a cleanup tool removes embedded output.
+    # v48 Empty converts the device-visible ScratchPad to an embedded Nintendo
+    # LZ77 stream automatically. The game still sees the original uncompressed
+    # bytes after the ARM9 expands it once at boot.
     native_payload = normalized_sp.read_bytes()
-    native_sp = project / 'embedded' / 'doja_scratchpad.bin'
-    native_sp.parent.mkdir(parents=True, exist_ok=True)
-    native_sp.write_bytes(native_payload)
-    native_sp_backup = project / 'build_doja' / 'doja_scratchpad.bin'
-    native_sp_backup.write_bytes(native_payload)
-    if native_sp.stat().st_size != len(native_payload):
-        raise RuntimeError('Native ScratchPad write verification failed')
-    if native_sp_backup.stat().st_size != len(native_payload):
-        raise RuntimeError('Native ScratchPad backup verification failed')
-    print('[DoJa] Native SP :', native_sp, native_sp.stat().st_size, 'bytes')
-    print('[DoJa] Native SP backup:', native_sp_backup, native_sp_backup.stat().st_size, 'bytes')
+    packed_size, wrapper_size, scratchpad_crc32 = write_lz77_scratchpad(
+        native_payload, project / 'embedded' / 'doja_scratchpad.lz7b')
+    raw_backup = project / 'build_doja' / 'doja_scratchpad.raw'
+    raw_backup.write_bytes(native_payload)
+    write_prepared_jam(project / 'build_doja' / 'prepared_game.jam', jam, len(native_payload))
     verify_cp932_jar(project / 'embedded' / 'game.jar')
-    verify_doja_v42_api(project / 'embedded' / 'game.jar')
+    verify_doja_v46_api(project / 'embedded' / 'game.jar')
     verify_ff4a_performance_jar(project / 'embedded' / 'game.jar', app_class)
     verify_offline_jar(project / 'embedded' / 'game.jar')
     verify_direct_scratchpad_jar(project / 'embedded' / 'game.jar')
@@ -863,20 +1287,20 @@ def main() -> int:
     # stubbed in this first milestone, so this contains no sample data.
     (project / 'embedded' / 'osnd_native.pcm').write_bytes(b'PPCM\x01\x00\x00\x00')
     install_default_icon(project, project / 'assets' / 'standalone_icon.bmp')
-    import zlib
-    scratchpad_crc32 = zlib.crc32(native_payload) & 0xFFFFFFFF
     print('[DoJa] SP CRC32  : %08X' % scratchpad_crc32)
     write_metadata(project, jam, app_name, app_class, app_param, rom_code,
                    output_stem, scratchpad_crc32, len(native_payload),
-                   args.screen_x, args.screen_y, corpse_party_compat)
-    prepared_marker = write_prepared_marker(project, output_stem, len(native_payload), corpse_party_compat)
+                   packed_size, wrapper_size, video, corpse_party_compat)
+    prepared_marker = write_prepared_marker(project, output_stem, len(native_payload),
+                                            packed_size, wrapper_size,
+                                            corpse_party_compat)
     print('[DoJa] Port version:', PORT_NAME)
     print('[DoJa] Output ROM  :', output_stem + '.nds')
     print('[DoJa] Marker      :', prepared_marker)
-    print('[OK] Prepared embedded/game.jar')
-    print('[OK] Prepared embedded/doja_scratchpad.bin (v42 same-name SAV file + legacy DJS import + default icon + full CP932/SJIS + Latin fix + native viewport/no fit + generic game metadata + input + zero-copy + DS 2432 KiB / DSi 8192 KiB heap)')
-    print('[OK] Prepared build_doja/doja_scratchpad.bin (automatic restore backup)')
-    print('[NEXT] Run build.bat')
+    print('[OK] game.jar: all entries STORED for fast class/resource loading')
+    print('[OK] ScratchPad: automatic Nintendo LZ77 outer pack')
+    print('[OK] Prepared JAM:', project / 'build_doja' / 'prepared_game.jam')
+    print('[NEXT] build-doja.bat will call build.bat automatically')
     return 0
 
 

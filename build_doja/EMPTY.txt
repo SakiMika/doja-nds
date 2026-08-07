@@ -1,0 +1,4 @@
+DoJa v48 Empty
+
+Run build-doja.bat to select JAR, JAM and SP.
+ScratchPad will be converted automatically to Nintendo LZ77 type 0x10.

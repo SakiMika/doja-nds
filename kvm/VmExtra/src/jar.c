@@ -1,5 +1,5 @@
 /*
- * Copyright © 2003 Sun Microsystems, Inc. All rights reserved.
+ * Copyright Â© 2003 Sun Microsystems, Inc. All rights reserved.
  * SUN PROPRIETARY/CONFIDENTIAL. Use is subject to license terms.
  *
  */
@@ -562,7 +562,7 @@ loadJARFileEntryInternal(JAR_INFO entry, const unsigned char *centralInfo,
     unsigned long expectedCRC = CENCRC(centralInfo); /* expected CRC */
     unsigned long actualCRC;
     unsigned char *result = NULL;
-    /* v42: hot-path JAR trace disabled. */
+    /* v46: hot-path JAR trace disabled. */
 
 #if JAR_FILES_USE_STDIO
     FILE *file = entry->u.jar.file;
@@ -581,9 +581,9 @@ loadJARFileEntryInternal(JAR_INFO entry, const unsigned char *centralInfo,
     /* This may cause a GC, so we have to extract out of "entry" all the
      * info we need, before calling this.
      */
-    /* v42: hot-path JAR trace disabled. */
+    /* v46: hot-path JAR trace disabled. */
     result = (unsigned char *)mallocBytes(extraBytes + decompLen);
-    /* v42: hot-path JAR trace disabled. */
+    /* v46: hot-path JAR trace disabled. */
 #if !COMPILING_FOR_KVM
     if (result == NULL) {
         goto errorReturn;
@@ -635,11 +635,11 @@ loadJARFileEntryInternal(JAR_INFO entry, const unsigned char *centralInfo,
                 memoryInput.remaining = (int)compLen + INFLATER_EXTRA_BYTES;
                 arg = &memoryInput;
 #endif
-                /* v42: hot-path JAR trace disabled. */
+                /* v46: hot-path JAR trace disabled. */
                 inflateOK = inflateData(arg, 
                                (JarGetByteFunctionType)jar_getBytes, compLen, 
                                     &decompData, decompLen);
-                /* v42: hot-path JAR trace disabled. */
+                /* v46: hot-path JAR trace disabled. */
                 /* The inflater can allocate memory, so we need to regenerate
                  * value from decompData. */
                 result = decompData - extraBytes;
@@ -657,15 +657,15 @@ loadJARFileEntryInternal(JAR_INFO entry, const unsigned char *centralInfo,
     }
 
     if (result != NULL) { 
-        /* v42: hot-path JAR trace disabled. */
+        /* v46: hot-path JAR trace disabled. */
         actualCRC = jarCRC32(result + extraBytes, decompLen);
-        /* v42: hot-path JAR trace disabled. */
+        /* v46: hot-path JAR trace disabled. */
         if (actualCRC != expectedCRC) { 
             goto errorReturn;
         }
     }
     *lengthP = decompLen;
-    /* v42: hot-path JAR trace disabled. */
+    /* v46: hot-path JAR trace disabled. */
     return (void *)result;
 
 errorReturn:    
@@ -686,13 +686,26 @@ errorReturn:
 
 static unsigned long
 jarCRC32(unsigned char *data, unsigned long length) {
-    unsigned long crc = 0xFFFFFFFF;
-    unsigned int j;
-    for ( ; length > 0; length--, data++) {
-        crc ^= *data;
-        for (j = 8; j > 0; --j) {
-            crc = (crc & 1) ? ((crc >> 1) ^ 0xedb88320) : (crc >> 1);
+    static unsigned long table[256];
+    static int tableReady = 0;
+    unsigned long crc = 0xFFFFFFFFUL;
+    unsigned int i;
+
+    if (!tableReady) {
+        for (i = 0; i < 256; ++i) {
+            unsigned long value = i;
+            unsigned int bit;
+            for (bit = 0; bit < 8; ++bit) {
+                value = (value & 1UL) ?
+                    ((value >> 1) ^ 0xEDB88320UL) : (value >> 1);
+            }
+            table[i] = value;
         }
+        tableReady = 1;
+    }
+
+    while (length-- > 0) {
+        crc = table[(crc ^ *data++) & 0xFFU] ^ (crc >> 8);
     }
     return ~crc;
 }

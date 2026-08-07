@@ -48,8 +48,11 @@ public abstract class Canvas extends Frame {
 
     private void ensureScreen() {
         if (screenImage == null) {
-            screenImage = javax.microedition.lcdui.Image.createImage(getWidth(), getHeight());
-            screenGraphics = new Graphics(screenImage.getGraphics(), this, getWidth(), getHeight());
+            int logicalWidth = nds.doja.MainApp.getLogicalWidth();
+            int logicalHeight = nds.doja.MainApp.getLogicalHeight();
+            screenImage = javax.microedition.lcdui.Image.createImage(logicalWidth, logicalHeight);
+            screenGraphics = new Graphics(screenImage.getGraphics(), this,
+                logicalWidth, logicalHeight);
         }
     }
 
@@ -59,7 +62,7 @@ public abstract class Canvas extends Frame {
 
     final void _flush() {
         ensureScreen();
-        // v42/FF4A: screenImage already contains the completed DoJa frame.
+        // v46/FF4A: screenImage is the 240x240 logical frame; BG3 stretches it to 256x192.
         // Present it directly instead of repainting it into Pstros emuImage
         // and then copying that second framebuffer to VRAM.
         nds.doja.FastPath.present(screenImage);

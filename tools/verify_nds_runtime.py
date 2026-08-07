@@ -1,40 +1,26 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse
+import argparse, sys
 from pathlib import Path
-import sys
 
-REQUIRED = [
-    b"DoJa v42",
-    b"MODE: RAM-FIRST SAVE",
-    b"GAME: CONTINUES IN RAM",
-    b"BOOT: %s",
-    b"JVM START",
-    b"VM CONSOLE: ON",
-    b"DoJa boot error:",
-]
-FORBIDDEN = [
-    b"DoJa v37",
-    b"MODE: SD FIRST",
-]
+REQUIRED = [b'DoJa v48 Empty', b'SP EXPAND', b'ScratchPad LZ77 expand failed']
+FORBIDDEN = [b'BOOT: NITROFS', b'NITROFS INIT FAILED', b'DSI MODE REQUIRED', b'DoJa v47']
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--nds", required=True)
-    ns = ap.parse_args()
-    path = Path(ns.nds)
-    if not path.is_file():
-        print(f"[FAIL] Missing ROM: {path}")
-        return 2
-    data = path.read_bytes()
-    missing = [x.decode("ascii") for x in REQUIRED if x not in data]
-    stale = [x.decode("ascii") for x in FORBIDDEN if x in data]
-    if missing or stale:
-        if missing: print("[FAIL] Runtime strings missing:", ", ".join(missing))
-        if stale: print("[FAIL] Stale runtime strings found:", ", ".join(stale))
-        return 1
-    print(f"[OK] ROM runtime verified: {path.name}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--nds', required=True)
+    args = parser.parse_args()
+    data = Path(args.nds).read_bytes()
+    for marker in REQUIRED:
+        if marker not in data:
+            print(f'[ERROR] ROM missing marker: {marker!r}')
+            return 1
+    for marker in FORBIDDEN:
+        if marker in data:
+            print(f'[ERROR] ROM contains stale marker: {marker!r}')
+            return 1
+    print('[OK] ROM contains DoJa v48 Empty Nintendo-LZ77 runtime markers.')
     return 0
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__ == '__main__':
+    sys.exit(main())

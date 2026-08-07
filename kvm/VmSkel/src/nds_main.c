@@ -16,11 +16,11 @@
 #error "Wrong generated DoJa metadata: run build_doja.bat for this source version"
 #endif
 #if DEFAULTHEAPSIZE != (2432*1024)
-#error "DoJa v42 requires a 2432 KiB DS fallback heap"
+#error "DoJa v48 keeps the 2432 KiB constant for source compatibility"
 #endif
 #define DOJA_DSI_HEAPSIZE (8*1024*1024)
 #if ENABLE_HEAP_COMPACTION != 0
-#error "DoJa v42 keeps KVM heap compaction disabled"
+#error "DoJa v48 keeps KVM heap compaction disabled"
 #endif
 
 extern char *UserClassPath;
@@ -36,10 +36,11 @@ extern const char *pstrosGetSavePath(void);
 extern const char *pstrosGetSaveBackendName(void);
 extern int pstrosGetSaveErrno(void);
 extern int pstrosGetSaveStage(void);
+extern int dojaSpRomInit(const char *path);
 extern int dojaSpPersistenceInit(const char *path);
 extern int dojaSpPersistenceFlush(void);
 
-static int dojaSaveStorageReady = 0;
+static int dojaSaveStorageReady = -1;
 static int dojaSaveLastState = 0;
 static int dojaSaveLastSlot = 0;
 static int dojaSaveLastCode = 0;
@@ -54,19 +55,21 @@ static const char *dojaSaveStageName(int stage) {
         case 20: return "LIBDVM INIT";
         case 21: return "FAT WRITE TEST";
         case 22: return "SD WRITE TEST";
-        case 40: return "NO STORAGE";
+        case 40: return "MANUAL ATTACH";
         default: return "READY";
     }
 }
 
 static void dojaSaveUiRender(void) {
     consoleClear();
-    iprintf("DoJa v42\n");
+    iprintf("DoJa v48 Empty\n");
     iprintf("------------------------------\n");
     iprintf("MODE: RAM-FIRST SAVE\n");
     iprintf("BOOT: %s\n", dojaBootStage);
     iprintf("HEAP: %ld KiB (%s)\n", dojaHeapBytes / 1024,
             isDSiMode() ? "DSi" : "DS");
+    iprintf("VIDEO: %s %dx%d\n", DOJA_SCALE_MODE_TEXT,
+            DOJA_OUTPUT_WIDTH, DOJA_OUTPUT_HEIGHT);
 
     if (dojaSaveStorageReady > 0) {
         iprintf("SAVE: READY\n");
@@ -74,6 +77,7 @@ static void dojaSaveUiRender(void) {
     } else if (dojaSaveStorageReady < 0) {
         iprintf("SAVE: RAM BUFFER\n");
         iprintf("MEDIA: NOT ATTACHED\n");
+        iprintf("ATTACH: START+SELECT\n");
     } else {
         iprintf("SAVE: CHECKING...\n");
     }
@@ -115,6 +119,12 @@ static void dojaSaveUiRender(void) {
 
 static void dojaBootUiStage(const char *stage) {
     dojaBootStage = stage != NULL ? stage : "UNKNOWN";
+    dojaSaveUiRender();
+}
+
+void dojaSaveUiAttaching(void) {
+    dojaBootStage = "SAVE ATTACH";
+    dojaSaveStorageReady = 0;
     dojaSaveUiRender();
 }
 
@@ -183,7 +193,11 @@ int main(int argc, char **argv) {
     char paramArg[128];
     char screenXArg[32];
     char screenYArg[32];
-    char *kvm_argv[5];
+    char canvasWArg[32];
+    char canvasHArg[32];
+    char logicalWArg[32];
+    char logicalHArg[32];
+    char *kvm_argv[9];
 
     if (argc > 0 && argv != NULL) launchPath = argv[0];
 
@@ -194,7 +208,7 @@ int main(int argc, char **argv) {
     consoleDemoInit();
     soundEnable();
     pstrosAudioDiagInit();
-    /* v42 keeps the VM console visible until the game renders.  v38 hid
+    /* v48 keeps the VM console visible until the game renders.  v38 hid
      * Java exceptions, so a failed app.start() looked identical to a hang. */
     pstrosSetVmConsoleEnabled(1);
 
@@ -203,17 +217,26 @@ int main(int argc, char **argv) {
     lcdSetVBlankIrq(true);
     irqEnable(IRQ_VBLANK);
 
+    dojaHeapBytes = isDSiMode() ? DOJA_DSI_HEAPSIZE : DEFAULTHEAPSIZE;
+    dojaBootUiStage(isDSiMode() ? "DSI RAM" : "DS RAM");
+
     dojaBootUiStage("ROM CHECK");
     if (!validate_embedded_jar()) wait_forever();
-    dojaBootUiStage("SAVE PROBE");
 
-    if (pstrosMountSaveStorageAuto(launchPath)) {
-        int restored = dojaSpPersistenceInit(pstrosGetSavePath());
-        dojaSaveUiStorage(1, 0);
-        dojaSaveUiLoaded(restored);
-    } else {
-        dojaSaveUiStorage(0, pstrosGetSaveErrno());
+    /* build-doja stores the game-visible ScratchPad in one Nintendo LZ77
+     * wrapper. Expand it once into RAM; no filesystem is touched at boot. */
+    dojaBootUiStage("SP EXPAND");
+    if (!dojaSpRomInit(NULL)) {
+        pstrosAudioDiagVmError("ScratchPad LZ77 expand failed");
+        iprintf("\nSCRATCHPAD EXPAND FAILED\n");
+        wait_forever();
     }
+    /* v48 must never block before the Java game starts.  This call only
+     * remembers the preferred save path and locks automatic media probing;
+     * it performs no fopen(), DLDI, DSi-SD or filesystem initialization operation. */
+    dojaBootUiStage("SAVE SAFE BOOT");
+    pstrosMountSaveStorageAuto(launchPath);
+    dojaSaveUiStorage(0, pstrosGetSaveErrno());
 
     dojaBootUiStage("MANIFEST");
     initJadBuffer();
@@ -222,10 +245,8 @@ int main(int argc, char **argv) {
         wait_forever();
     }
 
-    /* FF4A and other large DoJa titles exhaust the old fixed 2432 KiB heap.
-     * Keep the DS-safe budget in NTR mode, but use the extra DSi RAM whenever
-     * the ROM is launched in DSi mode (melonDS reports this through isDSiMode). */
-    dojaHeapBytes = isDSiMode() ? DOJA_DSI_HEAPSIZE : DEFAULTHEAPSIZE;
+    /* DSi mode receives the large heap; DS mode remains available for games
+     * whose expanded ScratchPad and Java heap fit in the original memory. */
     RequestedHeapSize = dojaHeapBytes;
     UserClassPath = STANDALONE_CLASSPATH;
 
@@ -234,15 +255,23 @@ int main(int argc, char **argv) {
     snprintf(paramArg, sizeof(paramArg), "-P%s", DOJA_APP_PARAM);
     snprintf(screenXArg, sizeof(screenXArg), "-X%d", DOJA_SCREEN_X);
     snprintf(screenYArg, sizeof(screenYArg), "-Y%d", DOJA_SCREEN_Y);
+    snprintf(canvasWArg, sizeof(canvasWArg), "-W%d", DOJA_CANVAS_WIDTH);
+    snprintf(canvasHArg, sizeof(canvasHArg), "-H%d", DOJA_CANVAS_HEIGHT);
+    snprintf(logicalWArg, sizeof(logicalWArg), "-Q%d", DOJA_LOGICAL_WIDTH);
+    snprintf(logicalHArg, sizeof(logicalHArg), "-R%d", DOJA_LOGICAL_HEIGHT);
     kvm_argv[1] = classArg;
     kvm_argv[2] = paramArg;
     kvm_argv[3] = screenXArg;
     kvm_argv[4] = screenYArg;
+    kvm_argv[5] = canvasWArg;
+    kvm_argv[6] = canvasHArg;
+    kvm_argv[7] = logicalWArg;
+    kvm_argv[8] = logicalHArg;
 
     dojaBootUiStage("JVM START");
     iprintf("\nAPP: %s\nPARAM: %s\n", DOJA_APP_CLASS, DOJA_APP_PARAM);
     iprintf("VM CONSOLE: ON\n");
-    result = StartJVM(5, kvm_argv);
+    result = StartJVM(9, kvm_argv);
     iprintf("\nJVM RETURNED: %d\n", result);
     dojaSpPersistenceFlush();
     pstrosAudioDiagKvmExit(result);

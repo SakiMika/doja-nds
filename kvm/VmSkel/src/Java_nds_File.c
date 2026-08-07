@@ -417,18 +417,17 @@ static void pstrosMakeEmptyRms(unsigned char *data) {
 }
 
 /*
- * DoJa v42 same-name .sav storage selection.
+ * DoJa v46 same-name .sav storage selection.
  *
  * The v27-v30 backends called legacy private device getters directly. Those
  * symbols are not exported by the current Calico/libdvm stack, so the final
  * link failed even though every C file compiled.
  *
- * v42 keeps the supported libfat compatibility entry point fatInitDefault().
- * On libnds 2.x this delegates to libdvm, initializes the block-device layer,
- * and mounts DLDI as fat:/ plus DSi SD as sd:/ when available.  We first probe
- * any volume already registered by the launcher, then initialize libdvm once,
- * then repeat the same write/read verification.  Save writes continue to use
- * normal stdio and never depend on private storage symbols.
+ * v46 keeps the supported libfat compatibility entry point fatInitDefault(),
+ * but never calls it during boot or from automatic ScratchPad writes.  The
+ * game starts with a RAM overlay; START+SELECT performs the one explicit media
+ * attachment attempt after video is already running.  Save writes continue to
+ * use normal stdio and never depend on private storage symbols.
  */
 static char pstrosSavePath[NDS_FILE_PATH_MAX + 1] = STANDALONE_SAVE_PATH;
 static char pstrosRmsSavePath[NDS_FILE_PATH_MAX + 1] = STANDALONE_RMS_SAVE_PATH;
@@ -439,8 +438,8 @@ static int pstrosSaveStage = 0;
 static int pstrosSaveConfigured = 0;
 static int pstrosPreferredBackend = 0; /* 1=DLDI/fat, 2=DSi-SD/sd */
 static int pstrosFatInitAttempted = 0;
-/* v42: one complete mount attempt per boot. A missing melonDS SD/DLDI
- * device must not be probed again for every ScratchPad byte written. */
+/* v46: automatic probes are locked from power-on.  Only the explicit
+ * START+SELECT attachment path is allowed to touch libfat/media. */
 static int pstrosSaveProbeLocked = 0;
 
 static int pstrosAsciiLower(int c) {
@@ -647,13 +646,9 @@ static int pstrosProbeMountedVolumes(int afterInit) {
     return 0;
 }
 
-int pstrosMountSaveStorageAuto(const char *launchPath) {
+static void pstrosRememberSavePreference(const char *launchPath) {
     int preferSd;
     int preferFat;
-    int initErr = 0;
-
-    if (pstrosSaveConfigured) return 1;
-    if (pstrosSaveProbeLocked) return 0;
 
     pstrosRememberLaunchSavePath(launchPath);
     preferSd = pstrosPathStartsWithNoCase(launchPath, "sd:/") ||
@@ -661,29 +656,58 @@ int pstrosMountSaveStorageAuto(const char *launchPath) {
     preferFat = pstrosPathStartsWithNoCase(launchPath, "fat:/");
     if (preferSd) pstrosPreferredBackend = 2;
     else if (preferFat) pstrosPreferredBackend = 1;
+}
 
+/* v46 safe-boot policy.
+ *
+ * Do not touch devoptab, DLDI, DSi SD or libdvm before StartJVM().  The v43
+ * boot path could remain forever inside fatInitDefault()/fopen() when melonDS
+ * had no SD image or when a real loader did not DLDI-patch the ROM.  Save data
+ * therefore starts in the sparse RAM overlay and media attachment is an
+ * explicit START+SELECT action after the title screen is visible.
+ */
+int pstrosMountSaveStorageAuto(const char *launchPath) {
+    if (pstrosSaveConfigured) return 1;
+
+    pstrosRememberSavePreference(launchPath);
+    pstrosSaveErrno = ENODEV;
+    pstrosSaveStage = 40; /* manual attachment required */
+    snprintf(pstrosSaveBackend, sizeof(pstrosSaveBackend), "NONE");
+    pstrosSaveProbeLocked = 1;
+    return 0;
+}
+
+/* The only entry point allowed to initialize libfat.  It is called from the
+ * deliberate START+SELECT save-attach gesture, never from boot or a ScratchPad
+ * write.  A failed driver can therefore not prevent FF4A from displaying. */
+int pstrosMountSaveStorageExplicit(void) {
+    int initErr = 0;
+
+    if (pstrosSaveConfigured) return 1;
+    pstrosSaveProbeLocked = 0;
     pstrosSaveErrno = 0;
     snprintf(pstrosSaveBackend, sizeof(pstrosSaveBackend), "NONE");
 
-    /* A launcher may already have registered one or both devoptab volumes. */
-    if (pstrosProbeMountedVolumes(0)) return 1;
+    /* A loader may already have mounted a volume. This probe is user-triggered
+     * and precedes libfat initialization so existing mounts are reused. */
+    if (pstrosProbeMountedVolumes(0)) {
+        pstrosSaveProbeLocked = 1;
+        return 1;
+    }
 
-    /* Current libnds 2.x exposes block devices through libdvm.  Initialize the
-     * supported compatibility layer exactly once; do not call removed private
-     * DLDI/DSi-SD getters or construct DISC_INTERFACE objects ourselves. */
     if (!pstrosFatInitAttempted) {
         pstrosFatInitAttempted = 1;
-        pstrosSaveStage = 20; /* libdvm/libfat compatibility init */
+        pstrosSaveStage = 20;
         errno = 0;
         if (!fatInitDefault()) {
             initErr = errno != 0 ? errno : ENODEV;
         }
     }
 
-    /* fatInitDefault can return false when no new medium was mounted.  Probe
-     * the registered names regardless, because a launcher-owned mount may
-     * still be usable and because the write/read test is authoritative. */
-    if (pstrosProbeMountedVolumes(1)) return 1;
+    if (pstrosProbeMountedVolumes(1)) {
+        pstrosSaveProbeLocked = 1;
+        return 1;
+    }
 
     if (pstrosSaveErrno == 0) {
         pstrosSaveErrno = initErr != 0 ? initErr : ENODEV;
@@ -693,14 +717,10 @@ int pstrosMountSaveStorageAuto(const char *launchPath) {
     return 0;
 }
 
-/* v42 deliberately does not re-probe after the complete boot-time attempt.
- * Some i-appli write ScratchPad one byte at a time during startup.
- * Re-running fopen/fatInit probes from that hot path made melonDS
- * appear frozen whenever no DLDI/SD image was attached. */
+/* Hot-path calls are strictly non-blocking.  They only observe a successful
+ * explicit attachment; they never probe or initialize storage themselves. */
 int pstrosMountSaveStorageDirect(void) {
-    if (pstrosSaveConfigured) return 1;
-    if (pstrosSaveProbeLocked) return 0;
-    return pstrosMountSaveStorageAuto(NULL);
+    return pstrosSaveConfigured ? 1 : 0;
 }
 
 const char *pstrosGetSavePath(void) {
@@ -726,13 +746,11 @@ int pstrosGetSaveStage(void) {
  * gameplay stores are complete before creating the first persistent file.
  */
 
-/*
- * nds_main.c asks the supported libdvm/libfat compatibility layer to expose
- * writable fat:/ or sd:/ storage once before the Java VM. Native RMS calls reuse
- * the verified path and never touch private device-interface symbols.
- */
+/* Native file/RMS calls remain non-blocking until START+SELECT has attached
+ * and verified a writable volume.  Before that they report "not available"
+ * rather than calling fopen() on an uninitialized devoptab name. */
 static int ensure_fat_ready(void) {
-    return 1;
+    return pstrosSaveConfigured ? 1 : 0;
 }
 
 static void map_standalone_save_path(char *path, int pathSize) {
@@ -744,8 +762,8 @@ static void map_standalone_save_path(char *path, int pathSize) {
 
     len = strlen(path);
     if (len >= 4 && strcmp(path + len - 4, ".sav") == 0) {
-        /* Every standalone ROM owns one RMS file. The path was selected by a
-         * real write-open probe before the JVM starts. */
+        /* Every standalone ROM owns one RMS file.  The final path is selected
+         * by the explicit verified attachment step. */
         snprintf(path, pathSize, "%s",
                  pstrosSaveConfigured ? pstrosRmsSavePath : STANDALONE_RMS_SAVE_PATH);
     }
