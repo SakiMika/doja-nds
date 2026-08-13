@@ -1,3 +1,0 @@
-DoJa v48 Empty - generic source
-No game JAR/JAM/SP is bundled.
-Run build-doja.bat. ScratchPad is automatically converted to Nintendo LZ77.
