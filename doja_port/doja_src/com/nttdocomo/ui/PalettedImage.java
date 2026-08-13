@@ -3,6 +3,7 @@ package com.nttdocomo.ui;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import nds.doja.image.IndexedGifDecoder;
+import nds.doja.image.IndexedBmpDecoder;
 
 /** Indexed GIF image with a mutable DoJa Palette. */
 public class PalettedImage extends Image {
@@ -26,14 +27,25 @@ public class PalettedImage extends Image {
     public static PalettedImage createPalettedImage(byte[] data) {
         if (data == null) throw new NullPointerException();
         try {
-            IndexedGifDecoder.Result decoded = IndexedGifDecoder.decode(data);
-            PalettedImage image = new PalettedImage(decoded.width, decoded.height, decoded.indexes, decoded.palette);
-            if (decoded.transparentIndex >= 0) {
-                image.transparentIndex = decoded.transparentIndex;
-                image.transparentIndexEnabled = true;
+            if (IndexedBmpDecoder.isBmp(data)) {
+                IndexedBmpDecoder.Result decoded = IndexedBmpDecoder.decode(data);
+                PalettedImage image = new PalettedImage(decoded.width, decoded.height, decoded.indexes, decoded.palette);
+                if (decoded.transparentIndex >= 0) {
+                    image.transparentIndex = decoded.transparentIndex;
+                    image.transparentIndexEnabled = true;
+                }
+                image.rebuild();
+                return image;
+            } else {
+                IndexedGifDecoder.Result decoded = IndexedGifDecoder.decode(data);
+                PalettedImage image = new PalettedImage(decoded.width, decoded.height, decoded.indexes, decoded.palette);
+                if (decoded.transparentIndex >= 0) {
+                    image.transparentIndex = decoded.transparentIndex;
+                    image.transparentIndexEnabled = true;
+                }
+                image.rebuild();
+                return image;
             }
-            image.rebuild();
-            return image;
         } catch (Exception ignored) {
             try {
                 javax.microedition.lcdui.Image decoded = javax.microedition.lcdui.Image.createImage(data, 0, data.length);
@@ -60,7 +72,7 @@ public class PalettedImage extends Image {
                 image.rebuild();
                 return image;
             } catch (Exception bad) {
-                throw new IllegalArgumentException("unsupported paletted image");
+                throw new IllegalArgumentException("unsupported paletted image (GIF/BMP)");
             }
         }
     }
@@ -74,7 +86,7 @@ public class PalettedImage extends Image {
             while ((count = in.read(buffer)) > 0) out.write(buffer, 0, count);
             return createPalettedImage(out.toByteArray());
         } catch (Exception e) {
-            throw new IllegalArgumentException("unsupported paletted image");
+            throw new IllegalArgumentException("unsupported paletted image (GIF/BMP)");
         }
     }
 

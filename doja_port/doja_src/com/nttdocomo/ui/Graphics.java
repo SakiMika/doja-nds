@@ -45,6 +45,7 @@ public final class Graphics implements Graphics3D {
     private int flipMode;
     private Fog fog;
     private Transform transform;
+    private final nds.doja.Software3DRenderer renderer3d;
 
     Graphics(javax.microedition.lcdui.Graphics graphics, Canvas canvas, int w, int h) {
         this(graphics, canvas, null, w, h);
@@ -57,6 +58,7 @@ public final class Graphics implements Graphics3D {
         imageOwner = image;
         width = w;
         height = h;
+        renderer3d = new nds.doja.Software3DRenderer(midp, w, h);
         clearClip();
     }
 
@@ -172,23 +174,85 @@ public final class Graphics implements Graphics3D {
     }
 
     public void drawImage(Image image, int x, int y, int sx, int sy, int w, int h) {
-        if (image != null && w > 0 && h > 0) {
-            int alpha = image._alpha();
-            if (alpha <= 0) return;
-            boolean nativeAlpha = alpha < 255 && !image._hasSoftwareColorKey();
-            javax.microedition.lcdui.Image src = nativeAlpha
-                ? image._baseDisplayImage() : image._displayImage();
-            int anchor = javax.microedition.lcdui.Graphics.TOP |
-                javax.microedition.lcdui.Graphics.LEFT;
-            if (nativeAlpha) {
-                nds.doja.FastPath.drawRegionAlpha(midp, src, sx, sy, w, h,
-                    midpTransform(flipMode), x, y, alpha);
-            } else {
-                midp.drawRegion(src, sx, sy, w, h, midpTransform(flipMode),
-                    x, y, anchor);
+        if (image == null || w <= 0 || h <= 0) return;
+
+        int alpha = image._alpha();
+        if (alpha <= 0) return;
+
+        /*
+         * DoJa titles commonly use sprite atlases with source rectangles that
+         * touch or slightly cross the physical bitmap edge.  Real DoJa
+         * implementations clip those draws.  MIDP drawRegion(), however,
+         * throws IllegalArgumentException for any out-of-bounds source pixel.
+         *
+         * v56 clips the source rectangle before entering MIDP.  Destination
+         * compensation is transform-aware so a clipped flipped/rotated sprite
+         * remains in the same logical place instead of visibly jumping.
+         */
+        int srcWidth = image.getWidth();
+        int srcHeight = image.getHeight();
+        int left = sx < 0 ? -sx : 0;
+        int top = sy < 0 ? -sy : 0;
+        int right = sx + w > srcWidth ? sx + w - srcWidth : 0;
+        int bottom = sy + h > srcHeight ? sy + h - srcHeight : 0;
+
+        if (left + right >= w || top + bottom >= h) return;
+
+        if (left != 0 || top != 0 || right != 0 || bottom != 0) {
+            switch (flipMode) {
+                case FLIP_HORIZONTAL:
+                    x += right;
+                    y += top;
+                    break;
+                case FLIP_VERTICAL:
+                    x += left;
+                    y += bottom;
+                    break;
+                case FLIP_ROTATE_180:
+                    x += right;
+                    y += bottom;
+                    break;
+                case FLIP_ROTATE_90:
+                    x += bottom;
+                    y += left;
+                    break;
+                case FLIP_ROTATE_90_HORIZONTAL:
+                    x += bottom;
+                    y += right;
+                    break;
+                case FLIP_ROTATE_90_VERTICAL:
+                    x += top;
+                    y += left;
+                    break;
+                case FLIP_ROTATE_270:
+                    x += top;
+                    y += right;
+                    break;
+                default:
+                    x += left;
+                    y += top;
+                    break;
             }
-            markOwner();
+            sx += left;
+            sy += top;
+            w -= left + right;
+            h -= top + bottom;
         }
+
+        boolean nativeAlpha = alpha < 255 && !image._hasSoftwareColorKey();
+        javax.microedition.lcdui.Image src = nativeAlpha
+            ? image._baseDisplayImage() : image._displayImage();
+        int anchor = javax.microedition.lcdui.Graphics.TOP |
+            javax.microedition.lcdui.Graphics.LEFT;
+        int transform = midpTransform(flipMode);
+
+        if (nativeAlpha) {
+            nds.doja.FastPath.drawRegionAlpha(midp, src, sx, sy, w, h,
+                transform, x, y, alpha);
+        } else {
+            midp.drawRegion(src, sx, sy, w, h, transform, x, y, anchor);
+        }
+        markOwner();
     }
 
     public int[] getRGBPixels(int x, int y, int w, int h, int[] pixels, int offset) {
@@ -256,6 +320,7 @@ public final class Graphics implements Graphics3D {
     /* Graphics3D compatibility surface. The software renderer can be expanded
        independently without making ordinary 2D DoJa games depend on it. */
     public void flushBuffer() {
+        renderer3d.flush();
         if (owner != null) {
             if (lockDepth > 0) {
                 presentPending = true;
@@ -271,24 +336,30 @@ public final class Graphics implements Graphics3D {
     }
 
     public void renderObject3D(DrawableObject3D object, Transform value) {
-        if (object != null) object._render(this, value == null ? transform : value);
+        if (object != null) object._render(this, value);
+    }
+
+    /** Internal entry used by Primitive._render(). */
+    public void _renderPrimitive(com.nttdocomo.ui.graphics3d.Primitive primitive, Transform model) {
+        renderer3d.render(primitive, model);
     }
 
     public void setClipRectFor3D(int x, int y, int w, int h) {
-        setClip(x, y, w, h);
+        renderer3d.setClip(x, y, w, h);
     }
 
     public void setFog(Fog value) {
         fog = value;
+        renderer3d.setFog(value);
     }
 
     public void setPerspectiveView(float near, float far, float angle) {
-        // Stored by native implementations; software compatibility currently
-        // projects primitives conservatively through DrawableObject3D._render.
+        renderer3d.setPerspective(near, far, angle);
     }
 
     public void setTransform(Transform value) {
         transform = value;
+        renderer3d.setTransform(value);
     }
 
     public Fog _fog() { return fog; }

@@ -608,7 +608,7 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 
 	jshort* dst  = (jshort *) KNI_GetRawArrayRegionPtr(dstArrayHandle, 0);
 	jshort* src  = (jshort *) KNI_GetRawArrayRegionPtr(srcArrayHandle, 0);
-	char* alpha = (char*) KNI_GetRawArrayRegionPtr(alphaArrayHandle, 0);
+	unsigned char* alpha = (unsigned char*) KNI_GetRawArrayRegionPtr(alphaArrayHandle, 0);
 	int directDst = ((unsigned long)dst < 0x0FUL);
 
 	//direct rendering to the screen
@@ -690,6 +690,8 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 				srcOffset = j2 * srcW + srcX;
 				for (i = dstX; i < dstMaxX; i++, dstOffset++, srcOffset++) {
 					pixel = src[srcOffset];
+					/* Keep the Pstros magenta colour key through v46+ native alpha fades. */
+					if ((pixel & 0x7FFF) == 0x7C1F) continue;
 					if (hasAlpha) A = (((unsigned char)alpha[srcOffset]) * globalAlpha + 127U) / 255U;
 					else A = (pixel & 0x8000) ? globalAlpha : 0U;
 					if (A >= 254U) {
@@ -715,6 +717,13 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 					for (i = dstX; i < dstMaxX; i++) {
 						pixel = src[srcOffset];
 						A = (unsigned char)alpha[srcOffset++];
+						/* Backported from the attached Pstros transparency fix.
+						 * Some DoJa/J2ME assets use RGB(255,0,255) as a colour key;
+						 * intermediate image operations can lose the original alpha. */
+						if ((pixel & 0x7FFF) == 0x7C1F) {
+							dstOffset++;
+							continue;
+						}
 						if (A == 0xFF) dst[dstOffset] = pixel;
 						else if (A != 0) {
 							AM = 255 - A;
@@ -730,7 +739,8 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_blit() {
 				} else {
 					for (i = dstX; i < dstMaxX; i++) {
 						pixel = src[srcOffset++];
-						if ((pixel & 0x8000) != 0) dst[dstOffset] = pixel;
+						/* Pstros legacy magenta key: opaque bit alone is not enough. */
+						if ((pixel & 0x8000) != 0 && (pixel & 0x7FFF) != 0x7C1F) dst[dstOffset] = pixel;
 						dstOffset++;
 					}
 				}
@@ -1275,7 +1285,7 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_Video_getRGB() {
 
 	unsigned short* dst  = (jshort *) KNI_GetRawArrayRegionPtr(dstArrayHandle, 0);
 	unsigned int* src  = (unsigned int *) KNI_GetRawArrayRegionPtr(srcArrayHandle, 0);
-	char* alpha = (char*) KNI_GetRawArrayRegionPtr(alphaArrayHandle, 0);
+	unsigned char* alpha = (unsigned char*) KNI_GetRawArrayRegionPtr(alphaArrayHandle, 0);
 
 	//direct rendering to the screen
 	if (dst < 0xF) { // == NULL

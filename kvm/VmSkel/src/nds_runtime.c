@@ -64,7 +64,7 @@ cell *allocateHeap(long *sizeptr, void **realresultptr) {
     long attempt = requested;
     void *space = NULL;
 
-    /* v48 asks for an 8 MiB Java heap in DSi mode.  Leave a controlled
+    /* v56 asks for an 8 MiB Java heap in DSi mode.  Leave a controlled
      * fallback ladder in case the launcher has fragmented or reserved part
      * of main RAM; a slightly smaller heap is still better than returning a
      * black screen with no diagnostic. */
@@ -78,16 +78,16 @@ cell *allocateHeap(long *sizeptr, void **realresultptr) {
 
     *realresultptr = space;
     if (space == NULL) {
-        printf("DoJa v48 heap malloc failed: requested=%ld minimum=%ld\n",
+        printf("DoJa v56 heap malloc failed: requested=%ld minimum=%ld\n",
                requested, (long)DEFAULTHEAPSIZE);
         return NULL;
     }
     *sizeptr = attempt;
     if (attempt != requested) {
-        printf("DoJa v48 heap fallback: requested=%ld actual=%ld\n",
+        printf("DoJa v56 heap fallback: requested=%ld actual=%ld\n",
                requested, attempt);
     }
-    printf("DoJa v48 heap allocated: %ld bytes\n", attempt);
+    printf("DoJa v56 heap allocated: %ld bytes\n", attempt);
     return (cell *)((((long)space) + (sizeof(cell) - 1)) & ~(sizeof(cell) - 1));
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright © 2003 Sun Microsystems, Inc. All rights reserved.
+ * Copyright ï¿½ 2003 Sun Microsystems, Inc. All rights reserved.
  * SUN PROPRIETARY/CONFIDENTIAL. Use is subject to license terms.
  */
 
@@ -45,6 +45,9 @@ static void
 getUnresolvedMethodStackInfo(CONSTANTPOOL cp, unsigned int cpIndex,
                              ByteCode token, unsigned int *argCountP,
                              long *accessFlagsP);
+
+static long
+getUnresolvedFieldStackFlags(CONSTANTPOOL cp, unsigned int cpIndex);
 
 #if INCLUDEDEBUGCODE
 
@@ -94,6 +97,7 @@ getGCRegisterMask(METHOD thisMethod, unsigned char *targetIP,  char *map)
     unsigned int index = 0;
     METHOD method;
     FIELD field;
+    long fieldAccessFlags;
     unsigned int methodArgCount;
     long methodAccessFlags;
 
@@ -404,22 +408,29 @@ again:
 
                 if (CONSTANTPOOL_TAG(cp, index) & CP_CACHEBIT) {
                     field = (FIELD)cp->entries[index].cache;
+                    fieldAccessFlags = field->accessFlags;
                 } else {
-                    fatalError(KVM_MSG_EXPECTED_RESOLVED_FIELD);
+                    /*
+                     * v56: exact-GC stack-map calculation can run before a
+                     * lazily referenced field has been resolved.  The old
+                     * code fatalError()ed here when the verifier was disabled.
+                     * For GC we only need pointer/int/double width, so derive
+                     * it from the interned field type key without allocation.
+                     */
+                    field = NULL;
+                    fieldAccessFlags = getUnresolvedFieldStackFlags(cp, index);
                 }
 
 #if INCLUDEDEBUGCODE
-                if (tracestackmaps) {
+                if (tracestackmaps && field != NULL) {
                     fprintf(stdout, "\t\t");
                     printFieldName(field, stdout);
                 }
 #endif
 
-                /* Determine what needs to be pushed onto the stack,
-                 * on the basis of the flags in the field */
-                if (field->accessFlags & ACC_POINTER) {
+                if (fieldAccessFlags & ACC_POINTER) {
                     goto pushPointer;
-                } else if (field->accessFlags & ACC_DOUBLE) {
+                } else if (fieldAccessFlags & ACC_DOUBLE) {
                     goto pushDouble;
                 } else {
                     goto pushInt;
@@ -435,21 +446,21 @@ again:
 
                 if (CONSTANTPOOL_TAG(cp, index) & CP_CACHEBIT) {
                     field = (FIELD)cp->entries[index].cache;
+                    fieldAccessFlags = field->accessFlags;
                 } else {
-                    fatalError(KVM_MSG_EXPECTED_RESOLVED_FIELD);
+                    field = NULL;
+                    fieldAccessFlags = getUnresolvedFieldStackFlags(cp, index);
                 }
 
 #if INCLUDEDEBUGCODE
-                if (tracestackmaps) {
+                if (tracestackmaps && field != NULL) {
                     fprintf(stdout, "\t\t");
                     printFieldName(field, stdout);
                 }
 #endif
 
-                /* We are either removing a single word or two words.  We
-                 * don't care if it is a pointer or not.
-                 */
-                stackSize -= (field->accessFlags & ACC_DOUBLE) ? 2 : 1;
+                /* We are either removing a single word or two words. */
+                stackSize -= (fieldAccessFlags & ACC_DOUBLE) ? 2 : 1;
                 break;
 
                 /* We remove thisIP[2] dimensions, and then we push
@@ -785,6 +796,24 @@ skipEncodedMethodType(unsigned char *from)
     } else {
         return from + 1;
     }
+}
+
+static long
+getUnresolvedFieldStackFlags(CONSTANTPOOL cp, unsigned int cpIndex)
+{
+    CONSTANTPOOL_ENTRY fieldEntry = &cp->entries[cpIndex];
+    unsigned short nameTypeIndex = fieldEntry->method.nameTypeIndex;
+    FieldTypeKey typeKey = cp->entries[nameTypeIndex].nameTypeKey.nt.typeKey;
+    unsigned int depth = ((unsigned int)typeKey) >> FIELD_KEY_ARRAY_SHIFT;
+    unsigned int baseType = ((unsigned int)typeKey) & 0x1FFF;
+
+    if (depth != 0 || baseType > 255) {
+        return ACC_POINTER;
+    }
+    if (baseType == 'J' || baseType == 'D') {
+        return ACC_DOUBLE;
+    }
+    return 0;
 }
 
 static void

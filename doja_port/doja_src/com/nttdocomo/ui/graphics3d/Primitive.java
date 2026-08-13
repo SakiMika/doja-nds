@@ -11,6 +11,10 @@ public final class Primitive extends DrawableObject3D {
     public static final int QUADS = 4;
     public static final int POINT_SPRITES = 5;
 
+    public static final int BLEND_NORMAL = 0;
+    public static final int BLEND_ALPHA = 32;
+    public static final int BLEND_ADD = 64;
+
     private final int primitiveType;
     private final int attributes;
     private final int count;
@@ -61,12 +65,14 @@ public final class Primitive extends DrawableObject3D {
     public void setTransparency(float value) { transparency = value; }
 
     public void _render(Graphics graphics, Transform transform) {
-        // Keep a stable, non-crashing software fallback. The buffers and state
-        // are preserved exactly so a fuller rasterizer can consume them later.
+        if (graphics != null) graphics._renderPrimitive(this, transform);
     }
 
     public int _type() { return primitiveType; }
     public int _attributes() { return attributes; }
+    public int _count() { return count; }
+    public int[] _vertices() { return vertices; }
+    public int[] _texcoords() { return textureCoordinates; }
     public Texture _texture() { return texture; }
     public int _blendMode() { return blendMode; }
     public boolean _perspectiveCorrection() { return perspectiveCorrection; }

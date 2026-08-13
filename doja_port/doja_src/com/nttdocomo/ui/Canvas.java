@@ -57,7 +57,17 @@ public abstract class Canvas extends Frame {
     }
 
     public final int getKeypadState() {
-        return keypadState;
+        /*
+         * v56: selection/cancel soft keys are edge-triggered on DoJa phones.
+         * FF4A implements its own held-key repeat by polling getKeypadState().
+         * Keeping SELECT/SOFT bits asserted across a screen transition can
+         * therefore replay the same action on the next menu (for example,
+         * Back from Load Game immediately selecting New Game/Prologue).
+         * Directional keys remain held/repeatable; action keys are delivered
+         * once through processEvent(KEY_PRESSED_EVENT, ...).
+         */
+        int oneShot = (1 << KEY_SELECT) | (1 << KEY_SOFT1) | (1 << KEY_SOFT2);
+        return keypadState & ~oneShot;
     }
 
     final void _flush() {
@@ -80,7 +90,10 @@ public abstract class Canvas extends Frame {
         int key = mapKey(keyCode);
         if (key >= 0) {
             keypadState |= (1 << key);
-            processEvent(Display.KEY_PRESSED_EVENT, key);
+            /* Do not repeat selection/cancel actions across menu changes. */
+            if (key != KEY_SELECT && key != KEY_SOFT1 && key != KEY_SOFT2) {
+                processEvent(Display.KEY_PRESSED_EVENT, key);
+            }
         }
     }
 

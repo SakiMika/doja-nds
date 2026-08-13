@@ -16,11 +16,11 @@
 #error "Wrong generated DoJa metadata: run build_doja.bat for this source version"
 #endif
 #if DEFAULTHEAPSIZE != (2432*1024)
-#error "DoJa v48 keeps the 2432 KiB constant for source compatibility"
+#error "DoJa v59 keeps the 2432 KiB constant for source compatibility"
 #endif
 #define DOJA_DSI_HEAPSIZE (8*1024*1024)
 #if ENABLE_HEAP_COMPACTION != 0
-#error "DoJa v48 keeps KVM heap compaction disabled"
+#error "DoJa v59 keeps KVM heap compaction disabled"
 #endif
 
 extern char *UserClassPath;
@@ -40,7 +40,7 @@ extern int dojaSpRomInit(const char *path);
 extern int dojaSpPersistenceInit(const char *path);
 extern int dojaSpPersistenceFlush(void);
 
-static int dojaSaveStorageReady = -1;
+static int dojaSaveStorageReady = 1;
 static int dojaSaveLastState = 0;
 static int dojaSaveLastSlot = 0;
 static int dojaSaveLastCode = 0;
@@ -62,9 +62,9 @@ static const char *dojaSaveStageName(int stage) {
 
 static void dojaSaveUiRender(void) {
     consoleClear();
-    iprintf("DoJa v48 Empty\n");
+    iprintf("DoJa v59 Empty\n");
     iprintf("------------------------------\n");
-    iprintf("MODE: RAM-FIRST SAVE\n");
+    iprintf("MODE: VIRTUAL RAM SAVE\n");
     iprintf("BOOT: %s\n", dojaBootStage);
     iprintf("HEAP: %ld KiB (%s)\n", dojaHeapBytes / 1024,
             isDSiMode() ? "DSi" : "DS");
@@ -72,12 +72,16 @@ static void dojaSaveUiRender(void) {
             DOJA_OUTPUT_WIDTH, DOJA_OUTPUT_HEIGHT);
 
     if (dojaSaveStorageReady > 0) {
+        const char *backend = pstrosGetSaveBackendName();
         iprintf("SAVE: READY\n");
-        iprintf("MEDIA: %s\n", pstrosGetSaveBackendName());
+        iprintf("MEDIA: %s\n", backend);
+        if (backend != NULL && strcmp(backend, "RAM-VIRTUAL") == 0) {
+            iprintf("PERSIST: START+SELECT\n");
+        }
     } else if (dojaSaveStorageReady < 0) {
-        iprintf("SAVE: RAM BUFFER\n");
-        iprintf("MEDIA: NOT ATTACHED\n");
-        iprintf("ATTACH: START+SELECT\n");
+        /* This state is reserved for a genuine virtual-backend failure.
+         * Missing FAT/SD no longer enters it. */
+        iprintf("SAVE: RAM ERROR\n");
     } else {
         iprintf("SAVE: CHECKING...\n");
     }
@@ -99,7 +103,7 @@ static void dojaSaveUiRender(void) {
             iprintf("WRITE CODE: %d\n", dojaSaveLastCode);
             break;
         case 6:
-            iprintf("LAST: RAM BUFFERED (%d)\n", dojaSaveLastCode);
+            iprintf("LAST: RAM SAVED (%d)\n", dojaSaveLastCode);
             break;
         default: iprintf("LAST: NOT SAVED YET\n"); break;
     }
@@ -129,13 +133,21 @@ void dojaSaveUiAttaching(void) {
 }
 
 void dojaSaveUiStorage(int ready, int errorCode) {
-    dojaSaveStorageReady = ready ? 1 : -1;
-    if (ready) {
+    const char *backend = pstrosGetSaveBackendName();
+    if (!ready && backend != NULL && strcmp(backend, "RAM-VIRTUAL") == 0) {
+        /* Physical attach can fail without invalidating the virtual device. */
+        dojaSaveStorageReady = 1;
         dojaSaveMountErrno = 0;
         dojaSaveMountStage = 0;
     } else {
-        dojaSaveMountErrno = errorCode;
-        dojaSaveMountStage = pstrosGetSaveStage();
+        dojaSaveStorageReady = ready ? 1 : -1;
+        if (ready) {
+            dojaSaveMountErrno = 0;
+            dojaSaveMountStage = 0;
+        } else {
+            dojaSaveMountErrno = errorCode;
+            dojaSaveMountStage = pstrosGetSaveStage();
+        }
     }
     dojaSaveUiRender();
 }
@@ -208,7 +220,7 @@ int main(int argc, char **argv) {
     consoleDemoInit();
     soundEnable();
     pstrosAudioDiagInit();
-    /* v48 keeps the VM console visible until the game renders.  v38 hid
+    /* v59 keeps the VM console visible until the game renders.  v38 hid
      * Java exceptions, so a failed app.start() looked identical to a hang. */
     pstrosSetVmConsoleEnabled(1);
 
@@ -231,12 +243,14 @@ int main(int argc, char **argv) {
         iprintf("\nSCRATCHPAD EXPAND FAILED\n");
         wait_forever();
     }
-    /* v48 must never block before the Java game starts.  This call only
-     * remembers the preferred save path and locks automatic media probing;
-     * it performs no fopen(), DLDI, DSi-SD or filesystem initialization operation. */
-    dojaBootUiStage("SAVE SAFE BOOT");
-    pstrosMountSaveStorageAuto(launchPath);
-    dojaSaveUiStorage(0, pstrosGetSaveErrno());
+    /* RAM-VIRTUAL is immediately usable by RMS and ScratchPad.  This performs
+     * no fopen(), DLDI, DSi-SD or filesystem initialization operation. */
+    dojaBootUiStage("SAVE RAM READY");
+    if (pstrosMountSaveStorageAuto(launchPath)) {
+        dojaSaveUiStorage(1, 0);
+    } else {
+        dojaSaveUiStorage(0, pstrosGetSaveErrno());
+    }
 
     dojaBootUiStage("MANIFEST");
     initJadBuffer();

@@ -70,6 +70,7 @@ extern void Java_com_sun_cldc_io_j2me_scratchpad_Protocol_nativeReadBytes(void);
 extern void Java_com_sun_cldc_io_j2me_scratchpad_Protocol_nativeWrite(void);
 extern void Java_com_sun_cldc_io_j2me_scratchpad_Protocol_nativeWriteBytes(void);
 extern void Java_com_sun_cldc_io_j2me_scratchpad_Protocol_nativeFlush(void);
+extern void Java_com_nttdocomo_util_NativeInflater_inflate(void);
 
 static NativeFunctionPtr
 getDoJaLateNativeFunction(INSTANCE_CLASS clazz, const char *methodName,
@@ -80,6 +81,15 @@ getDoJaLateNativeFunction(INSTANCE_CLASS clazz, const char *methodName,
     const char *baseName = clazz->clazz.baseName == NULL
         ? "" : UStringInfo(clazz->clazz.baseName);
     NativeFunctionPtr result = NULL;
+
+    if (strcmp(packageName, "com/nttdocomo/util") == 0 &&
+        strcmp(baseName, "NativeInflater") == 0) {
+        if (strcmp(methodName, "inflate") == 0 &&
+            xstrcmp(methodSignature, "([BII[B)I") == 0) {
+            return Java_com_nttdocomo_util_NativeInflater_inflate;
+        }
+        return NULL;
+    }
 
     if (strcmp(packageName, "com/sun/cldc/io/j2me/scratchpad") != 0 ||
         strcmp(baseName, "Protocol") != 0) {

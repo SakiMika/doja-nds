@@ -11,8 +11,8 @@ import zipfile
 import zlib
 from pathlib import Path
 
-PORT_VERSION = 48
-MARKER_NAME = 'prepared_v48.ok'
+PORT_VERSION = 59
+MARKER_NAME = 'prepared_v59.ok'
 WRAPPER = struct.Struct('<4sIIII')
 
 
@@ -93,7 +93,7 @@ def main() -> int:
         return fail('Source is empty. Run build-doja.bat first.')
     marker = json.loads(marker_path.read_text(encoding='utf-8'))
     if marker.get('port_version') != PORT_VERSION or marker.get('edition') != 'empty':
-        return fail('Preparation marker is not DoJa v48 Empty.')
+        return fail('Preparation marker is not DoJa v59 Empty.')
     if marker.get('codec') != 'Nintendo-LZ77-0x10':
         return fail('Preparation marker does not use Nintendo LZ77.')
 
@@ -152,6 +152,10 @@ def main() -> int:
             main_entry = app_class.replace('.', '/').replace('\\', '/') + '.class'
             if main_entry not in archive.namelist():
                 return fail(f'JAM AppClass is missing from game.jar: {main_entry}')
+            if 'com/nttdocomo/util/NativeInflater.class' not in archive.namelist():
+                return fail('NativeInflater.class is missing from game.jar.')
+            if b'NativeInflater' not in archive.read('com/nttdocomo/util/JarInflater$RawInflater.class'):
+                return fail('JarInflater RawInflater native DEFLATE bridge is missing.')
             bad = archive.testzip()
             if bad:
                 return fail(f'game.jar CRC failure: {bad}')
@@ -162,13 +166,18 @@ def main() -> int:
     main_source = (project / 'kvm' / 'VmSkel' / 'src' / 'nds_main.c').read_text(encoding='utf-8')
     if 'dojaSpLz77Decode' not in source or '_binary_embedded_doja_scratchpad_lz7b_start' not in source:
         return fail('Native LZ77 ScratchPad backend is missing.')
-    if 'DoJa v48 Empty' not in main_source or 'SP EXPAND' not in main_source:
-        return fail('DoJa v48 Empty boot markers are missing.')
+    if 'DoJa v59 Empty' not in main_source or 'SP EXPAND' not in main_source:
+        return fail('DoJa v59 Empty boot markers are missing.')
     if 'nitroFSInit' in main_source:
         return fail('Blocking NitroFS boot path is present.')
+    native_source = (project / 'kvm' / 'VmCommon' / 'src' / 'native.c').read_text(encoding='utf-8')
+    if 'Java_com_nttdocomo_util_NativeInflater_inflate' not in source:
+        return fail('NativeInflater C bridge is missing.')
+    if 'com/nttdocomo/util' not in native_source or 'NativeInflater' not in native_source:
+        return fail('NativeInflater late binding is missing.')
 
     ratio = 100.0 * packed_size / raw_size if raw_size else 0.0
-    print(f'[OK] DoJa v48 Empty: {app_class}; LZ77 {packed_size} -> {raw_size} bytes ({ratio:.1f}%); game.jar STORED')
+    print(f'[OK] DoJa v59 Empty: {app_class}; LZ77 {packed_size} -> {raw_size} bytes ({ratio:.1f}%); game.jar STORED')
     return 0
 
 

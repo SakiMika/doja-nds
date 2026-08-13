@@ -1969,7 +1969,7 @@ ignoreAttributes(FILEPOINTER_HANDLE ClassFileH, POINTERLIST_HANDLE StringPoolH)
 static void loadRawClass(INSTANCE_CLASS CurrentClass, bool_t fatalErrorIfFail)
 {
     const char *dbgRawName = CurrentClass->clazz.baseName ? UStringInfo(CurrentClass->clazz.baseName) : "?";
-    printf("raw enter: %s\n", dbgRawName);
+    (void)dbgRawName; /* v56 release: keep name available for debugger builds only. */
     START_TEMPORARY_ROOTS
         /* The UTF8 strings in the constant pool are put into a temporary
          * (directly indexable) list of strings that is discarded after
@@ -1981,7 +1981,6 @@ static void loadRawClass(INSTANCE_CLASS CurrentClass, bool_t fatalErrorIfFail)
         DECLARE_TEMPORARY_ROOT(FILEPOINTER, ClassFile,
             openClassfile(CurrentClass));
         int ch;
-        printf("raw after open: %s cf=%p\n", dbgRawName, ClassFile);
 
 #if INCLUDEDEBUGCODE
         if (traceclassloading || traceclassloadingverbose) {
@@ -2150,7 +2149,6 @@ static INSTANCE_CLASS findSuperMostUnlinked(INSTANCE_CLASS clazz)
 void
 loadClassfile(INSTANCE_CLASS InitiatingClass, bool_t fatalErrorIfFail)
 {
-    printf("loadClassfile begin: %s\n", getClassName((CLASS)InitiatingClass));
     /*
      * This must be volatile so that it's value is kept when an exception
      * occurs in the TRY block.
@@ -2170,7 +2168,6 @@ loadClassfile(INSTANCE_CLASS InitiatingClass, bool_t fatalErrorIfFail)
          * superclasses.
          */
         while (clazz != NULL && clazz->status == CLASS_RAW) {
-            printf("load raw begin: %s\n", getClassName((CLASS)clazz));
             clazz->status = CLASS_LOADING;
             loadRawClass(clazz, fatalErrorIfFail);
             /* v46 release: loader trace removed; per-line console I/O dominated boot. */

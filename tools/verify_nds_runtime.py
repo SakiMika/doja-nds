@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse, sys
 from pathlib import Path
 
-REQUIRED = [b'DoJa v48 Empty', b'SP EXPAND', b'ScratchPad LZ77 expand failed']
+REQUIRED = [b'DoJa v59 Empty', b'SP EXPAND', b'ScratchPad LZ77 expand failed']
 FORBIDDEN = [b'BOOT: NITROFS', b'NITROFS INIT FAILED', b'DSI MODE REQUIRED', b'DoJa v47']
 
 def main() -> int:
@@ -19,7 +19,7 @@ def main() -> int:
         if marker in data:
             print(f'[ERROR] ROM contains stale marker: {marker!r}')
             return 1
-    print('[OK] ROM contains DoJa v48 Empty Nintendo-LZ77 runtime markers.')
+    print('[OK] ROM contains DoJa v59 Empty Nintendo-LZ77 runtime markers.')
     return 0
 
 if __name__ == '__main__':

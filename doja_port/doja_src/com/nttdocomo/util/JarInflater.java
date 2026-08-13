@@ -9,7 +9,7 @@ import java.util.Hashtable;
 /**
  * Small ZIP/JAR reader for DoJa resource bundles.
  *
- * v46 is optimized for FF4A's repacked one-entry STORED bundles. STORED
+ * v56 preserves FF4A's original ScratchPad layout. STORED
  * entries keep a slice of the already-read ZIP array instead of allocating
  * and copying a second full payload. DEFLATE remains available for generic
  * games and older packages.
@@ -209,6 +209,18 @@ public final class JarInflater {
         private static final Huffman FIXED_DISTANCE = createFixedDistance();
 
         static byte[] inflate(byte[] input, int offset, int length, int expected) {
+            byte[] nativeOutput = new byte[expected];
+            try {
+                if (NativeInflater.inflate(input, offset, length, nativeOutput) == expected) {
+                    return nativeOutput;
+                }
+            } catch (Throwable ignored) {
+                // Generic/non-NDS fallback below.
+            }
+            return inflateJava(input, offset, length, expected);
+        }
+
+        private static byte[] inflateJava(byte[] input, int offset, int length, int expected) {
             BitReader bits = new BitReader(input, offset, length);
             byte[] output = new byte[expected];
             int out = 0;

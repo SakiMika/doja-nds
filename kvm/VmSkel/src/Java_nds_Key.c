@@ -3,11 +3,10 @@
 #include <kni.h>
 #include <stdio.h>
 
-/* v46 production input path: scan keys without RAW/POLL console spam.
- * START+SELECT is reserved as an explicit save-media attachment gesture.
- * Storage initialization is never attempted automatically during boot or
- * from the ScratchPad write path, so a missing DLDI/SD device cannot hide the
- * game behind the SAVE CHECKING screen. */
+/* v48 Empty virtual-save input path.
+ * START+SELECT optionally attaches FAT/SD persistence.  The game already has
+ * a fully valid RAM save device, so this gesture is never required to play or
+ * to satisfy save/RMS checks. */
 extern int dojaSpPersistenceAttachStorage(void);
 static int dojaSaveAttachLatched = 0;
 

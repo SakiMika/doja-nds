@@ -20,6 +20,7 @@
  *=======================================================================*/
 
 #include <global.h>
+#include <inflate.h>
 
 /*=========================================================================
  * Forward declarations
@@ -162,7 +163,7 @@ void Java_com_sun_cldc_io_ResourceInputStream_size(void) {
 }
 
 /*=========================================================================
- * DoJa v48 ScratchPad ROM access with persistent same-name .sav saves.
+ * DoJa v56 ScratchPad ROM access with persistent same-name .sav saves.
  *
  * build-doja converts the selected game's ScratchPad to a Nintendo LZ77
  * type-0x10 stream. The wrapper is expanded once into RAM before KVM starts.
@@ -384,8 +385,10 @@ static int dojaSpEnsurePersistence(void) {
     if (dojaSpPersistenceReady) return 1;
     if (dojaSpStorageUnavailable) return 0;
     if (!pstrosMountSaveStorageDirect()) {
+        /* Physical persistence is absent, but the virtual ScratchPad overlay
+         * remains a valid save device.  Do not turn that into an ENODEV UI
+         * state or an application-visible failure. */
         dojaSpStorageUnavailable = 1;
-        dojaSaveUiStorage(0, pstrosGetSaveErrno());
         return 0;
     }
     /* If RAM writes already happened while FAT was unavailable, do not call
@@ -412,7 +415,9 @@ int dojaSpPersistenceAttachStorage(void) {
     dojaSpStorageUnavailable = 0;
     if (!pstrosMountSaveStorageExplicit()) {
         dojaSpStorageUnavailable = 1;
-        dojaSaveUiStorage(0, pstrosGetSaveErrno());
+        /* Keep RAM-VIRTUAL reported as ready.  START+SELECT is only an
+         * optional persistence request, not a requirement for saving. */
+        dojaSaveUiStorage(1, 0);
         return 0;
     }
 
@@ -755,13 +760,14 @@ int dojaSpPersistenceFlush(void) {
 
     if (!dojaSpDirty) return 0;
     if (!dojaSpPersistenceReady && !dojaSpEnsurePersistence()) {
-        /* Non-fatal RAM fallback. The i-appli has already updated the overlay,
-         * so report buffering and let the game continue normally. */
+        /* RAM-VIRTUAL is a successful save backend, not a failed fallback.
+         * The sparse overlay is already updated and immediately readable by
+         * the game.  Return success even when no persistent media exists. */
         if (!dojaSpRamBufferReported) {
             dojaSaveUiBuffered(dojaSpChunkCount);
             dojaSpRamBufferReported = 1;
         }
-        return 0;
+        return 1;
     }
     dojaSaveUiSaving(0);
 
@@ -885,7 +891,7 @@ void Java_com_sun_cldc_io_j2me_scratchpad_Protocol_nativeWrite(void) {
     int size = dojaSpSize();
     int chunk;
     if (position < 0 || position >= size) return;
-    /* v46: never mount/probe storage from a single-byte write. */
+    /* v48 Empty: single-byte writes always succeed in the RAM overlay. */
     chunk = dojaSpFindChunk(position / DOJA_SP_CHUNK_SIZE, 1);
     if (chunk >= 0) {
         dojaSpChunks[chunk][position % DOJA_SP_CHUNK_SIZE] =
@@ -910,7 +916,7 @@ void Java_com_sun_cldc_io_j2me_scratchpad_Protocol_nativeWriteBytes(void) {
     }
     if (position >= size) return;
     if (length > size - position) length = size - position;
-    /* Buffer first; persistence is attempted only at the flush boundary. */
+    /* Buffer into RAM first; physical persistence is optional. */
     for (i = 0; i < length; i++) {
         int absolute = position + i;
         int chunk = dojaSpFindChunk(absolute / DOJA_SP_CHUNK_SIZE, 1);
@@ -931,3 +937,82 @@ void Java_com_sun_cldc_io_j2me_scratchpad_Protocol_nativeFlush(void) {
     pushStack(dojaSpPersistenceFlush());
 }
 
+
+
+/* DoJa v56: raw RFC1951 inflater bridge for JarInflater.
+ * The output is decoded into stable C memory while the KVM inflater may
+ * allocate temporary Huffman tables, then copied back to the rooted byte[]. */
+typedef struct DoJaNativeInflateInput {
+    const unsigned char *cursor;
+    int remaining;
+} DoJaNativeInflateInput;
+
+static int dojaNativeInflateGetBytes(unsigned char *dst, int length, void *info) {
+    DoJaNativeInflateInput *input = (DoJaNativeInflateInput *)info;
+    int count = length;
+    if (input == NULL || dst == NULL || length <= 0) return 0;
+    if (count > input->remaining) count = input->remaining;
+    if (count > 0) {
+        memcpy(dst, input->cursor, count);
+        input->cursor += count;
+        input->remaining -= count;
+    }
+    return count;
+}
+
+void Java_com_nttdocomo_util_NativeInflater_inflate(void) {
+    BYTEARRAY output = popStackAsType(BYTEARRAY);
+    int compressedLength = popStack();
+    int offset = popStack();
+    BYTEARRAY input = popStackAsType(BYTEARRAY);
+    unsigned char *compressed = NULL;
+    unsigned char *decoded = NULL;
+    unsigned char *decodedHandle;
+    DoJaNativeInflateInput source;
+    int expected;
+    int ok = 0;
+
+    if (input == NULL || output == NULL) {
+        raiseException(NullPointerException);
+        return;
+    }
+    expected = (int)output->length;
+    if (offset < 0 || compressedLength < 0 ||
+        offset > (int)input->length ||
+        compressedLength > (int)input->length - offset) {
+        raiseException(IndexOutOfBoundsException);
+        return;
+    }
+
+    compressed = (unsigned char *)malloc((size_t)compressedLength + INFLATER_EXTRA_BYTES);
+    decoded = (unsigned char *)malloc(expected > 0 ? (size_t)expected : 1U);
+    if (compressed == NULL || decoded == NULL) {
+        if (compressed != NULL) free(compressed);
+        if (decoded != NULL) free(decoded);
+        pushStack(-1);
+        return;
+    }
+
+    if (compressedLength > 0)
+        memcpy(compressed, &input->bdata[offset], compressedLength);
+    memset(compressed + compressedLength, 0, INFLATER_EXTRA_BYTES);
+
+    source.cursor = compressed;
+    source.remaining = compressedLength + INFLATER_EXTRA_BYTES;
+    decodedHandle = decoded;
+
+    START_TEMPORARY_ROOTS
+        DECLARE_TEMPORARY_ROOT(BYTEARRAY, outputRoot, output);
+        ok = inflateData(&source,
+                         (JarGetByteFunctionType)dojaNativeInflateGetBytes,
+                         compressedLength, &decodedHandle, expected);
+        output = outputRoot;
+        if (ok && expected > 0) {
+            memcpy(output->bdata, decoded, expected);
+        }
+    END_TEMPORARY_ROOTS
+
+    free(decoded);
+    free(compressed);
+    pushStack(ok ? expected : -1);
+}

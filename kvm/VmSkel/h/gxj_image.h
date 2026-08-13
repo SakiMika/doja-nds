@@ -246,13 +246,20 @@ static int gxj_png_decode_pixels(
             for (x = 0; x < width; x++) {
                 int idx = (bitDepth == 8) ? row[x] : gxj_png_get_packed_sample(row, x, bitDepth);
                 int r = 0, g = 0, b = 0, a = 255;
+                unsigned short pixel;
                 if (idx < plteEntries) {
                     r = plte[idx * 3];
                     g = plte[idx * 3 + 1];
                     b = plte[idx * 3 + 2];
                 }
                 if (idx < trnsLen) a = trns[idx];
-                pixelBuf[outIndex] = gxj_rgb15(r, g, b);
+                /* Backported from the attached Pstros transparency fix:
+                 * indexed assets commonly use RGB(255,0,255) as a colour key. */
+                if (r == 255 && g == 0 && b == 255) a = 0;
+                pixel = gxj_rgb15(r, g, b);
+                /* TYPE_TRANSP may rely on RGB15 bit 15 instead of alphaBuf. */
+                if (a == 0) pixel &= 0x7FFF;
+                pixelBuf[outIndex] = pixel;
                 alphaBuf[outIndex++] = (char)a;
             }
         } else if (colorType == 4) {

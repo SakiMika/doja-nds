@@ -653,3 +653,25 @@ This keeps the runtime multi-game while allowing aggressive optimization only wh
 - Supported game-specific resource packs can also be converted to STORED.
 - Large games should use DSi mode.
 - If gameplay is smooth but scene loading is extremely slow, investigate the `.sp` before blaming rendering performance.
+
+
+## v48 Empty virtual RAM save update
+
+The runtime now exposes `RAM-VIRTUAL` as a valid save device from power-on.
+
+This fixes games that display an error when physical FAT/SD is unavailable during
+startup. ScratchPad flushes and RMS file operations succeed in RAM immediately.
+No FAT/DLDI/SD probe is performed before the JVM starts.
+
+`START+SELECT` is now optional: it only attempts to attach persistent storage.
+If that attempt fails, the game keeps using the valid RAM save backend and does
+not receive `ENODEV`.
+
+Expected status:
+
+```text
+MODE: VIRTUAL RAM SAVE
+SAVE: READY
+MEDIA: RAM-VIRTUAL
+PERSIST: START+SELECT
+```

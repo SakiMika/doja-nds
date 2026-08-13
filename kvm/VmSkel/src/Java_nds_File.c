@@ -417,30 +417,110 @@ static void pstrosMakeEmptyRms(unsigned char *data) {
 }
 
 /*
- * DoJa v46 same-name .sav storage selection.
+ * DoJa v48 Empty virtual-RAM save selection.
  *
  * The v27-v30 backends called legacy private device getters directly. Those
  * symbols are not exported by the current Calico/libdvm stack, so the final
  * link failed even though every C file compiled.
  *
- * v46 keeps the supported libfat compatibility entry point fatInitDefault(),
- * but never calls it during boot or from automatic ScratchPad writes.  The
- * game starts with a RAM overlay; START+SELECT performs the one explicit media
- * attachment attempt after video is already running.  Save writes continue to
- * use normal stdio and never depend on private storage symbols.
+ * The Java-visible save device is RAM-VIRTUAL from power-on.  START+SELECT
+ * optionally attaches FAT/SD as a persistence mirror after the game is
+ * already running.  Missing physical media is therefore never an application
+ * error and never blocks boot.
  */
-static char pstrosSavePath[NDS_FILE_PATH_MAX + 1] = STANDALONE_SAVE_PATH;
-static char pstrosRmsSavePath[NDS_FILE_PATH_MAX + 1] = STANDALONE_RMS_SAVE_PATH;
+#define PSTROS_RAM_SAVE_PATH "ram:/doja.sav"
+#define PSTROS_RAM_RMS_PATH  "ram:/doja.rms"
+
+static char pstrosSavePath[NDS_FILE_PATH_MAX + 1] = PSTROS_RAM_SAVE_PATH;
+static char pstrosRmsSavePath[NDS_FILE_PATH_MAX + 1] = PSTROS_RAM_RMS_PATH;
 static char pstrosLaunchSavePath[NDS_FILE_PATH_MAX + 1] = "";
-static char pstrosSaveBackend[12] = "NONE";
+static char pstrosSaveBackend[16] = "RAM-VIRTUAL";
 static int pstrosSaveErrno = 0;
 static int pstrosSaveStage = 0;
+/* Physical persistence is optional.  The virtual RAM backend is always
+ * available to Java from power-on; this flag only means FAT/SD is attached. */
 static int pstrosSaveConfigured = 0;
 static int pstrosPreferredBackend = 0; /* 1=DLDI/fat, 2=DSi-SD/sd */
 static int pstrosFatInitAttempted = 0;
-/* v46: automatic probes are locked from power-on.  Only the explicit
- * START+SELECT attachment path is allowed to touch libfat/media. */
 static int pstrosSaveProbeLocked = 0;
+
+/* One in-memory RMS file is enough for the standalone runtime because
+ * map_standalone_save_path() maps the MIDlet's .sav path to the generated
+ * per-ROM RMS path.  Keeping this separate from FAT lets games create/read
+ * RecordStores before any physical device is available. */
+static int pstrosPathStartsWithNoCase(const char *path, const char *prefix);
+
+static unsigned char *pstrosRamRmsData = NULL;
+static int pstrosRamRmsLength = 0;
+static int pstrosRamRmsCapacity = 0;
+static int pstrosRamRmsValid = 0;
+static int pstrosRamRmsDirty = 0;
+
+static int pstrosIsRamPath(const char *path) {
+    return path != NULL && pstrosPathStartsWithNoCase(path, "ram:/");
+}
+
+static int pstrosRamRmsStore(const unsigned char *data, int length) {
+    unsigned char *newData;
+    int newCapacity;
+    if (length < 0 || (length > 0 && data == NULL)) return 0;
+    if (length > pstrosRamRmsCapacity) {
+        newCapacity = pstrosRamRmsCapacity > 0 ? pstrosRamRmsCapacity : 256;
+        while (newCapacity < length) {
+            if (newCapacity > (1 << 24)) {
+                newCapacity = length;
+                break;
+            }
+            newCapacity <<= 1;
+        }
+        newData = (unsigned char *)realloc(pstrosRamRmsData, newCapacity);
+        if (newData == NULL) return 0;
+        pstrosRamRmsData = newData;
+        pstrosRamRmsCapacity = newCapacity;
+    }
+    if (length > 0) memcpy(pstrosRamRmsData, data, length);
+    pstrosRamRmsLength = length;
+    pstrosRamRmsValid = 1;
+    pstrosRamRmsDirty = 1;
+    return 1;
+}
+
+static int pstrosRamRmsCopyOut(unsigned char *dst, int maxLength) {
+    int length;
+    if (!pstrosRamRmsValid || dst == NULL || maxLength < 0) return -1;
+    length = pstrosRamRmsLength;
+    if (length > maxLength) length = maxLength;
+    if (length > 0) memcpy(dst, pstrosRamRmsData, length);
+    return length;
+}
+
+/* After an explicit START+SELECT attachment, persist the current virtual RMS
+ * snapshot if it is complete enough for the configured RMS policy.  A failed
+ * physical write never invalidates the RAM save that the game is using. */
+static int pstrosFlushRamRmsToAttachedStorage(void) {
+    FILE *fp;
+    int wrote;
+    if (!pstrosSaveConfigured || !pstrosRamRmsValid || !pstrosRamRmsDirty)
+        return 1;
+    if (!pstrosRmsReadyToPersist(pstrosRamRmsData, pstrosRamRmsLength))
+        return 1;
+
+    errno = 0;
+    fp = fopen(pstrosRmsSavePath, "wb");
+    if (fp == NULL) return 0;
+    wrote = (int)fwrite(pstrosRamRmsData, 1, pstrosRamRmsLength, fp);
+    if (wrote != pstrosRamRmsLength) {
+        fclose(fp);
+        return 0;
+    }
+    if (fflush(fp) != 0) {
+        fclose(fp);
+        return 0;
+    }
+    if (fclose(fp) != 0) return 0;
+    pstrosRamRmsDirty = 0;
+    return 1;
+}
 
 static int pstrosAsciiLower(int c) {
     if (c >= 'A' && c <= 'Z') return c + ('a' - 'A');
@@ -613,6 +693,8 @@ static int pstrosConfigureSaveStorageOn(const char *volume, const char *backend)
     pstrosSaveConfigured = 1;
     pstrosSaveErrno = 0;
     pstrosSaveStage = 0;
+    /* Physical persistence is a mirror of the already-valid RAM backend. */
+    pstrosFlushRamRmsToAttachedStorage();
     return 1;
 }
 
@@ -669,12 +751,17 @@ static void pstrosRememberSavePreference(const char *launchPath) {
 int pstrosMountSaveStorageAuto(const char *launchPath) {
     if (pstrosSaveConfigured) return 1;
 
+    /* v48 Empty RAM-save update:
+     * Never expose "no device" to Java merely because FAT/SD is absent.
+     * The game always receives a valid volatile save device. */
     pstrosRememberSavePreference(launchPath);
-    pstrosSaveErrno = ENODEV;
-    pstrosSaveStage = 40; /* manual attachment required */
-    snprintf(pstrosSaveBackend, sizeof(pstrosSaveBackend), "NONE");
+    snprintf(pstrosSavePath, sizeof(pstrosSavePath), "%s", PSTROS_RAM_SAVE_PATH);
+    snprintf(pstrosRmsSavePath, sizeof(pstrosRmsSavePath), "%s", PSTROS_RAM_RMS_PATH);
+    snprintf(pstrosSaveBackend, sizeof(pstrosSaveBackend), "RAM-VIRTUAL");
+    pstrosSaveErrno = 0;
+    pstrosSaveStage = 0;
     pstrosSaveProbeLocked = 1;
-    return 0;
+    return 1;
 }
 
 /* The only entry point allowed to initialize libfat.  It is called from the
@@ -709,10 +796,14 @@ int pstrosMountSaveStorageExplicit(void) {
         return 1;
     }
 
-    if (pstrosSaveErrno == 0) {
-        pstrosSaveErrno = initErr != 0 ? initErr : ENODEV;
-    }
-    if (pstrosSaveStage == 0) pstrosSaveStage = 40;
+    /* Physical media is optional.  Failure only means persistence is not
+     * attached; restore the virtual device and never surface ENODEV to Java. */
+    (void)initErr;
+    snprintf(pstrosSavePath, sizeof(pstrosSavePath), "%s", PSTROS_RAM_SAVE_PATH);
+    snprintf(pstrosRmsSavePath, sizeof(pstrosRmsSavePath), "%s", PSTROS_RAM_RMS_PATH);
+    snprintf(pstrosSaveBackend, sizeof(pstrosSaveBackend), "RAM-VIRTUAL");
+    pstrosSaveErrno = 0;
+    pstrosSaveStage = 0;
     pstrosSaveProbeLocked = 1;
     return 0;
 }
@@ -746,9 +837,8 @@ int pstrosGetSaveStage(void) {
  * gameplay stores are complete before creating the first persistent file.
  */
 
-/* Native file/RMS calls remain non-blocking until START+SELECT has attached
- * and verified a writable volume.  Before that they report "not available"
- * rather than calling fopen() on an uninitialized devoptab name. */
+/* Physical FAT is only required for non-virtual paths.  RMS itself can use
+ * the always-available RAM backend before START+SELECT attaches persistence. */
 static int ensure_fat_ready(void) {
     return pstrosSaveConfigured ? 1 : 0;
 }
@@ -764,8 +854,7 @@ static void map_standalone_save_path(char *path, int pathSize) {
     if (len >= 4 && strcmp(path + len - 4, ".sav") == 0) {
         /* Every standalone ROM owns one RMS file.  The final path is selected
          * by the explicit verified attachment step. */
-        snprintf(path, pathSize, "%s",
-                 pstrosSaveConfigured ? pstrosRmsSavePath : STANDALONE_RMS_SAVE_PATH);
+        snprintf(path, pathSize, "%s", pstrosRmsSavePath);
     }
 }
 
@@ -804,11 +893,15 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_File_exists() {
     KNI_DeclareHandle(stringHandle);
     KNI_GetParameterAsObject(1, stringHandle);
 
-    if (ensure_fat_ready() && copy_java_string_to_c(stringHandle, path, sizeof(path)) >= 0) {
-        fp = fopen(path, "rb");
-        if (fp != NULL) {
-            result = KNI_TRUE;
-            fclose(fp);
+    if (copy_java_string_to_c(stringHandle, path, sizeof(path)) >= 0) {
+        if (pstrosIsRamPath(path)) {
+            result = pstrosRamRmsValid ? KNI_TRUE : KNI_FALSE;
+        } else if (ensure_fat_ready()) {
+            fp = fopen(path, "rb");
+            if (fp != NULL) {
+                result = KNI_TRUE;
+                fclose(fp);
+            }
         }
     }
 
@@ -825,16 +918,18 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_File_size() {
     KNI_DeclareHandle(stringHandle);
     KNI_GetParameterAsObject(1, stringHandle);
 
-    if (ensure_fat_ready() && copy_java_string_to_c(stringHandle, path, sizeof(path)) >= 0) {
-        fp = fopen(path, "rb");
-        if (fp != NULL) {
-            if (fseek(fp, 0, SEEK_END) == 0) {
-                long len = ftell(fp);
-                if (len >= 0) {
-                    result = (int)len;
+    if (copy_java_string_to_c(stringHandle, path, sizeof(path)) >= 0) {
+        if (pstrosIsRamPath(path)) {
+            result = pstrosRamRmsValid ? pstrosRamRmsLength : -1;
+        } else if (ensure_fat_ready()) {
+            fp = fopen(path, "rb");
+            if (fp != NULL) {
+                if (fseek(fp, 0, SEEK_END) == 0) {
+                    long len = ftell(fp);
+                    if (len >= 0) result = (int)len;
                 }
+                fclose(fp);
             }
-            fclose(fp);
         }
     }
 
@@ -859,54 +954,67 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_File_load() {
     KNI_GetParameterAsObject(2, arrayHandle);
     requestedMaxLen = KNI_GetParameterAsInt(3);
 
-    if (!ensure_fat_ready() ||
-        copy_java_string_to_c(stringHandle, path, sizeof(path)) < 0 ||
+    if (copy_java_string_to_c(stringHandle, path, sizeof(path)) < 0 ||
         KNI_IsNullHandle(arrayHandle)) {
         result = -1;
     } else {
         arrayLen = KNI_GetArrayLength(arrayHandle);
-        if (requestedMaxLen < 0 || requestedMaxLen > arrayLen) {
+        if (requestedMaxLen < 0 || requestedMaxLen > arrayLen)
             requestedMaxLen = arrayLen;
-        }
 
-        buffer = (unsigned char *)malloc(requestedMaxLen > 0 ? requestedMaxLen : 1);
-        if (buffer == NULL) {
-            result = -2;
-        } else {
-            fp = fopen(path, "rb");
-            if (fp == NULL) {
-                result = -1000 - errno;
+        if (pstrosIsRamPath(path)) {
+            if (!pstrosRamRmsValid) {
+                result = -1000 - ENOENT;
             } else {
-                while (got < requestedMaxLen) {
-                    int chunkLen = requestedMaxLen - got;
-                    int count;
-                    if (chunkLen > NDS_FILE_IO_CHUNK) chunkLen = NDS_FILE_IO_CHUNK;
-                    count = (int)fread(buffer + got, 1, chunkLen, fp);
-                    if (count > 0) got += count;
-                    if (count < chunkLen) break;
+                got = pstrosRamRmsLength;
+                if (got > requestedMaxLen) got = requestedMaxLen;
+                if (got > 0) {
+                    KNI_SetRawArrayRegion(arrayHandle, 0, got,
+                                          (jbyte *)pstrosRamRmsData);
                 }
-                if (ferror(fp)) {
-                    result = -2000 - errno;
-                } else {
-                    int filteredLen = pstrosFilterRmsInPlace(buffer, got);
-                    if (filteredLen < 0) {
-                        /* A torn/corrupt versioned save must not poison boot. */
-                        if (requestedMaxLen >= 8) {
-                            pstrosMakeEmptyRms(buffer);
-                            filteredLen = 8;
-                        } else {
-                            filteredLen = 0;
-                        }
-                    }
-                    if (filteredLen > 0) {
-                        KNI_SetRawArrayRegion(arrayHandle, 0, filteredLen,
-                                              (jbyte *)buffer);
-                    }
-                    result = filteredLen;
-                }
-                fclose(fp);
+                result = got;
             }
-            free(buffer);
+        } else if (!ensure_fat_ready()) {
+            result = -1;
+        } else {
+            buffer = (unsigned char *)malloc(requestedMaxLen > 0 ? requestedMaxLen : 1);
+            if (buffer == NULL) {
+                result = -2;
+            } else {
+                fp = fopen(path, "rb");
+                if (fp == NULL) {
+                    result = -1000 - errno;
+                } else {
+                    while (got < requestedMaxLen) {
+                        int chunkLen = requestedMaxLen - got;
+                        int count;
+                        if (chunkLen > NDS_FILE_IO_CHUNK) chunkLen = NDS_FILE_IO_CHUNK;
+                        count = (int)fread(buffer + got, 1, chunkLen, fp);
+                        if (count > 0) got += count;
+                        if (count < chunkLen) break;
+                    }
+                    if (ferror(fp)) {
+                        result = -2000 - errno;
+                    } else {
+                        int filteredLen = pstrosFilterRmsInPlace(buffer, got);
+                        if (filteredLen < 0) {
+                            if (requestedMaxLen >= 8) {
+                                pstrosMakeEmptyRms(buffer);
+                                filteredLen = 8;
+                            } else {
+                                filteredLen = 0;
+                            }
+                        }
+                        if (filteredLen > 0) {
+                            KNI_SetRawArrayRegion(arrayHandle, 0, filteredLen,
+                                                  (jbyte *)buffer);
+                        }
+                        result = filteredLen;
+                    }
+                    fclose(fp);
+                }
+                free(buffer);
+            }
         }
     }
 
@@ -930,8 +1038,7 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_File_save() {
     KNI_GetParameterAsObject(1, stringHandle);
     KNI_GetParameterAsObject(2, arrayHandle);
 
-    if (!ensure_fat_ready() ||
-        copy_java_string_to_c(stringHandle, path, sizeof(path)) < 0 ||
+    if (copy_java_string_to_c(stringHandle, path, sizeof(path)) < 0 ||
         KNI_IsNullHandle(arrayHandle)) {
         result = -1;
     } else {
@@ -940,16 +1047,19 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_File_save() {
         if (buffer == NULL) {
             result = -2;
         } else {
-            if (arrayLen > 0) {
+            if (arrayLen > 0)
                 KNI_GetRawArrayRegion(arrayHandle, 0, arrayLen, (jbyte *)buffer);
-            }
+
             writeLen = pstrosFilterRmsInPlace(buffer, arrayLen);
             if (writeLen < 0) {
                 result = -4000;
+            } else if (pstrosIsRamPath(path)) {
+                /* A RAM save is a real successful save from the MIDlet's
+                 * perspective.  Persistence can be attached later. */
+                result = pstrosRamRmsStore(buffer, writeLen) ? arrayLen : -2;
+            } else if (!ensure_fat_ready()) {
+                result = -1;
             } else if (!pstrosRmsReadyToPersist(buffer, writeLen)) {
-                /* First boot is still constructing RecordStores. Report a
-                 * successful deferred autosave, but do not create/truncate
-                 * the persistent file until the gameplay RMS is complete. */
                 result = arrayLen;
             } else {
                 errno = 0;
@@ -971,14 +1081,10 @@ KNIEXPORT KNI_RETURNTYPE_VOID Java_nds_File_save() {
                         pos += written;
                     }
                     errno = 0;
-                    if (close(fd) != 0 && result >= 0) {
+                    if (close(fd) != 0 && result >= 0)
                         result = -3000 - errno;
-                    } else if (result >= 0) {
-                        /* Java compares the result with its unfiltered buffer
-                         * length. Report the source length after a complete
-                         * filtered write so it does not print a false failure. */
+                    else if (result >= 0)
                         result = arrayLen;
-                    }
                 }
             }
             free(buffer);

@@ -4,7 +4,6 @@ cd /d "%~dp0"
 
 set "PYEXE="
 set "PYARGS="
-
 where py.exe >nul 2>nul && set "PYEXE=py.exe" && set "PYARGS=-3"
 if not defined PYEXE where python.exe >nul 2>nul && set "PYEXE=python.exe"
 if not defined PYEXE goto no_python
@@ -16,7 +15,7 @@ set "OUTPUT_STEM="
 for /f "tokens=3" %%A in ('findstr /b /c:"TARGET := " standalone_game.mk') do set "OUTPUT_STEM=%%A"
 if not defined OUTPUT_STEM goto invalid
 
-del /q "*_doja_v*.nds" 2>nul
+del /q "%OUTPUT_STEM%.nds" 2>nul
 
 set "DKP_ROOT="
 if defined DEVKITPRO if exist "%DEVKITPRO%\msys2\usr\bin\make.exe" set "DKP_ROOT=%DEVKITPRO%"
@@ -24,12 +23,11 @@ if not defined DKP_ROOT if exist "D:\devkitPro\msys2\usr\bin\make.exe" set "DKP_
 if not defined DKP_ROOT if exist "C:\devkitPro\msys2\usr\bin\make.exe" set "DKP_ROOT=C:\devkitPro"
 if not defined DKP_ROOT goto no_devkit
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_with_log.ps1" -DkpRoot "%DKP_ROOT%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0build.ps1" -DkpRoot "%DKP_ROOT%"
 set "ERR=%ERRORLEVEL%"
 
 echo.
 if not "%ERR%"=="0" goto failed
-
 if not exist "%OUTPUT_STEM%.nds" (
     echo [ERROR] The toolchain reported success, but %OUTPUT_STEM%.nds was not created.
     pause
@@ -38,20 +36,17 @@ if not exist "%OUTPUT_STEM%.nds" (
 
 %PYEXE% %PYARGS% tools\verify_nds_runtime.py --nds "%OUTPUT_STEM%.nds"
 if errorlevel 1 (
-    echo [ERROR] The newly built ROM still contains an old runtime or is missing the required v48 fixes.
+    echo [ERROR] The new ROM is missing required DoJa v59 runtime fixes.
     pause
     exit /b 1
 )
 
-echo [OK] DoJa v48 Empty ROM created:
-echo      %OUTPUT_STEM%.nds
-echo [LOG] last_build.log
+echo [OK] ROM created: %OUTPUT_STEM%.nds
 pause
 exit /b 0
 
 :failed
 echo [ERROR] NDS build failed. Error code: %ERR%
-echo [LOG] Please check or send: last_build.log
 pause
 exit /b %ERR%
 
@@ -62,12 +57,12 @@ exit /b 1
 
 :no_devkit
 echo [ERROR] devkitPro MSYS2 make.exe was not found.
-echo Set DEVKITPRO or install devkitPro in a supported location.
+echo Set DEVKITPRO or install devkitPro in D:\devkitPro or C:\devkitPro.
 pause
 exit /b 1
 
 :invalid
-echo [ERROR] DoJa v48 Empty has not been prepared with a game,
+echo [ERROR] DoJa v59 Empty has not been prepared with a game,
 echo         or the generated data is inconsistent.
 echo Run build-doja.bat and select the JAR, JAM, and SP first.
 pause

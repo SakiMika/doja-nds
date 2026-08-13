@@ -1,8 +1,8 @@
-# DoJa v48 Empty — generic JAR/JAM/SP builder.
+# DoJa v59 Empty — generic JAR/JAM/SP builder.
 # build-doja.bat converts the selected ScratchPad to embedded Nintendo LZ77
 # and stores every game.jar entry uncompressed for fast class loading.
 
-TARGET       := unprepared_doja_v48
+TARGET       := unprepared
 BUILD        := build
 SOURCES      := source
 INCLUDES     := include \
@@ -92,17 +92,19 @@ check:
 	@echo "DEVKITARM=$(DEVKITARM)"
 	@echo "FAT header=$(if $(FAT_INC),$(FAT_INC)/fat.h,NOT FOUND)"
 	@echo "FAT library=$(if $(FAT_LIB),$(FAT_LIB)/libfat.a,NOT FOUND)"
-	@echo "[CHECK] DoJa port version: v48"
+	@echo "[CHECK] DoJa port version: v59"
 	@test -x "$(CC)" || (echo "Missing devkitARM compiler: $(CC)"; exit 1)
 	@test -f "$(CALICO_INC)/calico.h" || (echo "Missing Calico headers"; exit 1)
 	@test -n "$(FAT_INC)" || (echo "Missing fat.h"; exit 1)
 	@test -n "$(FAT_LIB)" || (echo "Missing libfat.a"; exit 1)
 	@test -f "$(CALICO)/share/ds9.specs" || (echo "Missing Calico ARM9 specs"; exit 1)
 	@test -f "$(ARM7_ELF)" || (echo "Missing ARM7 binary"; exit 1)
-	@test -f "build_doja/prepared_v48.ok" || (echo "Missing v48 preparation marker"; exit 1)
-	@grep -q '^TARGET := .*_doja_v48$$' standalone_game.mk || (echo "Wrong standalone_game.mk"; exit 1)
-	@grep -q '^#define DOJA_SOURCE_PORT_VERSION 48$$' include/doja_port_version.h || (echo "Wrong source version"; exit 1)
-	@grep -q '^#define DOJA_PORT_BUILD_VERSION 48$$' include/standalone_game.h || (echo "Wrong generated version"; exit 1)
+	@test -f "build_doja/prepared_v59.ok" || (echo "Missing v59 preparation marker"; exit 1)
+	@grep -Eq '^TARGET := [a-z0-9_]+$$' standalone_game.mk || (echo "Wrong standalone_game.mk"; exit 1)
+	@grep -q '^#define DOJA_SOURCE_PORT_VERSION 59$$' include/doja_port_version.h || (echo "Wrong source version"; exit 1)
+	@grep -q '^#define DOJA_PORT_BUILD_VERSION 59$$' include/standalone_game.h || (echo "Wrong generated version"; exit 1)
+	@test -f doja_port/doja_src/nds/doja/image/IndexedBmpDecoder.java || (echo "Missing v59 indexed BMP decoder"; exit 1)
+	@grep -q '0x7C1F' kvm/VmSkel/src/Java_nds_Video.c || (echo "Missing Pstros magenta transparency fix"; exit 1)
 	@test -f "$(EMBEDDED_JAR)" || (echo "Missing $(EMBEDDED_JAR)"; exit 1)
 	@test -f "$(EMBEDDED_AUDIO)" || (echo "Missing $(EMBEDDED_AUDIO)"; exit 1)
 	@test -f "$(EMBEDDED_SCRATCHPAD)" || (echo "Missing $(EMBEDDED_SCRATCHPAD)"; exit 1)
@@ -140,6 +142,7 @@ $(BUILD)/$(TARGET).elf: $(OBJS)
 
 HOT_ARM_OBJECTS := $(BUILD)/vmcommon_08_interpret.o $(BUILD)/vmcommon_09_execute.o \
                    $(BUILD)/vmcommon_01_cache.o $(BUILD)/vmcommon_10_loader.o \
+                   $(BUILD)/vmcommon_17_stackmap.o \
                    $(BUILD)/vmextra_01_jar.o $(BUILD)/vmextra_02_inflate.o \
                    $(BUILD)/vmextra_03_resource.o $(BUILD)/vmskel_17_Java_nds_Video.o
 $(HOT_ARM_OBJECTS): CFLAGS := $(filter-out -mthumb -O2,$(CFLAGS)) -marm -O3 -fomit-frame-pointer
@@ -153,7 +156,7 @@ $(BUILD):
 	mkdir -p $@
 
 clean:
-	rm -rf $(BUILD) *_doja_v*.nds unprepared_doja_v48.nds
+	rm -rf $(BUILD) $(TARGET).nds unprepared.nds
 
 env:
 	@echo "TARGET=$(TARGET)"

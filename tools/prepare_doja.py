@@ -19,10 +19,10 @@ from fontgen import generate_font
 from cp932gen import generate_cp932_table
 from segment_stream_patch import patch_segment_streams, segment_stream_patch_counts
 
-PORT_VERSION = 48
-PORT_TAG = "v48"
-PORT_NAME = "DoJa v48 Empty"
-PREPARED_MARKER = "prepared_v48.ok"
+PORT_VERSION = 59
+PORT_TAG = "v59"
+PORT_NAME = "DoJa v59 Empty"
+PREPARED_MARKER = "prepared_v59.ok"
 
 
 def parse_jam(path: Path) -> dict[str, str]:
@@ -187,6 +187,78 @@ def normalize_scratchpad(source: Path, jam: dict[str, str], output: Path) -> tup
     return output, mode
 
 
+DJSP_MAGIC = b"DJSP"
+DJSP_HEADER = struct.Struct("<4sHHIIIII")
+DJSP_VERSION = 1
+DJSP_CHUNK_SIZE = 256
+
+def _crc32(data: bytes) -> int:
+    return zlib.crc32(data) & 0xFFFFFFFF
+
+def _parse_djsp_overlay(path: Path) -> dict:
+    raw = path.read_bytes()
+    if len(raw) < DJSP_HEADER.size:
+        raise ValueError('Save file is too small to be a DJSP overlay: %s' % path)
+    magic, version, chunk_size, base_size, base_crc, count, payload_crc, reserved = DJSP_HEADER.unpack_from(raw, 0)
+    if magic != DJSP_MAGIC:
+        raise ValueError('Unsupported save format (expected DJSP): %s' % path)
+    if version != DJSP_VERSION or chunk_size != DJSP_CHUNK_SIZE:
+        raise ValueError('Unsupported DJSP version/chunk size: version=%d chunk=%d' % (version, chunk_size))
+    expected = DJSP_HEADER.size + count * (4 + chunk_size)
+    if len(raw) != expected:
+        raise ValueError('DJSP length mismatch: file=%d expected=%d' % (len(raw), expected))
+    chunks=[]
+    pos=DJSP_HEADER.size
+    payload=bytearray()
+    seen=set()
+    for _ in range(count):
+        cid = struct.unpack_from('<I', raw, pos)[0]
+        id_bytes = raw[pos:pos+4]
+        pos += 4
+        data = raw[pos:pos+chunk_size]
+        pos += chunk_size
+        if cid in seen:
+            raise ValueError('DJSP contains duplicate chunk id %d' % cid)
+        seen.add(cid)
+        payload.extend(id_bytes)
+        payload.extend(data)
+        chunks.append((cid, data))
+    if _crc32(bytes(payload)) != payload_crc:
+        raise ValueError('DJSP payload CRC mismatch')
+    return {
+        'path': path, 'base_size': base_size, 'base_crc': base_crc,
+        'count': count, 'chunks': chunks, 'payload_crc': payload_crc,
+    }
+
+def _apply_djsp_overlay(base: bytes, overlay: dict, label: str) -> bytes:
+    size=len(base)
+    crc=_crc32(base)
+    if overlay['base_size'] != size or overlay['base_crc'] != crc:
+        raise ValueError('%s does not match this ScratchPad base: save expects size=%d crc=%08X, base is size=%d crc=%08X' %
+                         (label, overlay['base_size'], overlay['base_crc'], size, crc))
+    out=bytearray(base)
+    max_chunk=(size + DJSP_CHUNK_SIZE - 1)//DJSP_CHUNK_SIZE
+    for cid, chunk in overlay['chunks']:
+        if cid >= max_chunk:
+            raise ValueError('%s contains out-of-range chunk id %d' % (label, cid))
+        start=cid*DJSP_CHUNK_SIZE
+        end=min(start+DJSP_CHUNK_SIZE, size)
+        out[start:end]=chunk[:end-start]
+    print('[DoJa] Existing save: imported %d DJSP chunk(s) into %s ScratchPad' % (overlay['count'], label))
+    return bytes(out)
+
+def _find_save_candidate(explicit: str | None, jar: Path, jam: Path, sp: Path) -> Path | None:
+    """v59 imports external DJSP saves only when explicitly requested.
+
+    Original handset packages may already include Continue data in the .sp.
+    Auto-importing a same-name file can overwrite that bundled state.
+    """
+    if not explicit:
+        return None
+    path = Path(explicit).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return path
 
 # Corpse Party NewChapter offline-boot patch.
 #
@@ -259,6 +331,100 @@ _FF4A_CANVAS_CTOR_PATCHED = bytes.fromhex(
     'b2 00 5b 11 00 f0 00 11 00 f0 00 b8 01 72 '
     '05 11 00 f0 11 00 f0 b8 01 73'
 )
+
+
+# FF4A diagnostic patch for the one-line Japanese "An error occurred" box.
+# d.d() intentionally catches java/lang/Exception around the field-engine
+# update/render pair z(); L(); and replaces the real exception with a generic
+# message.  On the NDS port this hides the actual compatibility failure.
+#
+# Original method code (exact FF4A 1.3.1 signature):
+#   invokestatic d.z
+#   invokestatic d.L
+#   return
+# catch Exception:
+#   pop
+#   ldc_w "エラーが発生しました"
+#   invokestatic m.b
+#   return
+#
+# Replace only the handler body with ATHROW + NOPs.  Code length, exception
+# table, offsets, and StackMap positions remain unchanged.  The KVM then prints
+# the real uncaught exception/backtrace on the lower screen.
+_FF4A_FIELD_CATCH = bytes.fromhex(
+    'b8 01 64 b8 00 a4 b1 57 13 01 8b b8 00 d6 b1'
+)
+_FF4A_FIELD_CATCH_TRACE = bytes.fromhex(
+    'b8 01 64 b8 00 a4 b1 bf 00 00 00 00 00 00 00'
+)
+
+# FF4A Continue/load diagnostic: m.a(String) is the main loop.  Its broad
+# catch(Exception) swallows the actual failure and switches the game to state 7
+# with the generic Japanese message.  Replace the handler body with ATHROW and
+# NOP padding so the KVM prints the real exception/backtrace without changing
+# method length, branch offsets, the exception table, or StackMap offsets.
+_FF4A_MAINLOOP_CATCH = bytes.fromhex(
+    '57 13 02 cb b3 00 96 b8 01 62 10 07 59 b3 00 c8 b3 00 bf'
+)
+_FF4A_MAINLOOP_CATCH_TRACE = bytes.fromhex(
+    'bf 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00'
+)
+
+
+# v59 outer Continue/load diagnostic. FF4A.start() catches the exception
+# rethrown by m.a(String), discards it, calls terminate(), and returns.
+# Replace that 6-byte handler with ATHROW + NOP padding so the existing
+# nds.doja.MainApp catch(Throwable) prints the real exception and backtrace.
+_FF4A_START_CATCH = bytes.fromhex('57 2a b6 00 0d b1')
+_FF4A_START_CATCH_TRACE = bytes.fromhex('bf 00 00 00 00 00')
+
+
+def patch_ff4a_start_exception_trace(name: str, payload: bytes,
+                                     app_class: str) -> tuple[bytes, list[str]]:
+    normalized = name.replace('\\', '/')
+    if app_class != 'FF4A' or normalized != 'FF4A.class':
+        return payload, []
+    data = payload
+    original_count = data.count(_FF4A_START_CATCH)
+    trace_count = data.count(_FF4A_START_CATCH_TRACE)
+    if original_count == 1:
+        data = data.replace(_FF4A_START_CATCH, _FF4A_START_CATCH_TRACE, 1)
+        return data, ['ff4a-start-exception-rethrow-trace']
+    if original_count == 0 and trace_count == 1:
+        return data, ['ff4a-start-exception-rethrow-already-enabled']
+    raise RuntimeError('FF4A.start() exception handler signature changed/ambiguous')
+
+
+def patch_ff4a_mainloop_exception_trace(name: str, payload: bytes,
+                                          app_class: str) -> tuple[bytes, list[str]]:
+    normalized = name.replace('\\', '/')
+    if app_class != 'FF4A' or normalized != 'm.class':
+        return payload, []
+    data = payload
+    original_count = data.count(_FF4A_MAINLOOP_CATCH)
+    trace_count = data.count(_FF4A_MAINLOOP_CATCH_TRACE)
+    if original_count == 1:
+        data = data.replace(_FF4A_MAINLOOP_CATCH, _FF4A_MAINLOOP_CATCH_TRACE, 1)
+        return data, ['ff4a-mainloop-exception-rethrow-trace']
+    if original_count == 0 and trace_count == 1:
+        return data, ['ff4a-mainloop-exception-rethrow-already-enabled']
+    raise RuntimeError('FF4A m.a(String) exception handler signature changed/ambiguous')
+
+
+def patch_ff4a_field_exception_trace(name: str, payload: bytes,
+                                      app_class: str) -> tuple[bytes, list[str]]:
+    normalized = name.replace('\\', '/')
+    if app_class != 'FF4A' or normalized != 'd.class':
+        return payload, []
+    data = payload
+    original_count = data.count(_FF4A_FIELD_CATCH)
+    trace_count = data.count(_FF4A_FIELD_CATCH_TRACE)
+    if original_count == 1:
+        data = data.replace(_FF4A_FIELD_CATCH, _FF4A_FIELD_CATCH_TRACE, 1)
+        return data, ['ff4a-field-exception-rethrow-trace']
+    if original_count == 0 and trace_count == 1:
+        return data, ['ff4a-field-exception-rethrow-already-enabled']
+    raise RuntimeError('FF4A d.d() field exception handler signature changed/ambiguous')
 
 def patch_ff4a_performance(name: str, payload: bytes, app_class: str) -> tuple[bytes, list[str]]:
     normalized = name.replace('\\', '/')
@@ -658,7 +824,7 @@ def write_lz77_scratchpad(raw: bytes, output: Path) -> tuple[int, int, int]:
 def write_prepared_jam(path: Path, jam: dict[str, str], raw_size: int) -> None:
     values = dict(jam)
     values['SPsize'] = str(raw_size)
-    values['DoJaPortBuild'] = 'v48-empty'
+    values['DoJaPortBuild'] = 'v59-empty'
     values['NDSOuterCompression'] = 'LZ77'
     preferred = [
         'AppName', 'AppVer', 'PackageURL', 'AppSize', 'AppClass', 'AppParam',
@@ -756,7 +922,7 @@ def merge_jar(original: Path, class_dir: Path, font_bin: Path, cp932_bin: Path,
         'DoJa-App-Class: ' + app_class + '\r\n'
         'DoJa-Port-Version: ' + str(PORT_VERSION) + '\r\n'
         'DoJa-FF4A-Optimized: ' + ('1' if app_class == 'FF4A' else '0') + '\r\n'
-        'DoJa-FF4A-Bytecode-Profile: ' + ('v48-stored-lz77' if app_class == 'FF4A' else 'none') + '\r\n'
+        'DoJa-FF4A-Bytecode-Profile: ' + ('v59-continue-exception-trace' if app_class == 'FF4A' else 'none') + '\r\n'
         'DoJa-Physical-Canvas: 256x192\r\n'
         'DoJa-Logical-Canvas: 240x240\r\n\r\n'
     ).encode('utf-8')
@@ -773,6 +939,12 @@ def merge_jar(original: Path, class_dir: Path, font_bin: Path, cp932_bin: Path,
             game_payload, patch_tags = patch_game_for_offline_boot(name, game_payload)
             game_payload, perf_tags = patch_ff4a_performance(name, game_payload, app_class)
             patch_tags.extend(perf_tags)
+            game_payload, field_trace_tags = patch_ff4a_field_exception_trace(name, game_payload, app_class)
+            patch_tags.extend(field_trace_tags)
+            game_payload, main_trace_tags = patch_ff4a_mainloop_exception_trace(name, game_payload, app_class)
+            patch_tags.extend(main_trace_tags)
+            game_payload, start_trace_tags = patch_ff4a_start_exception_trace(name, game_payload, app_class)
+            patch_tags.extend(start_trace_tags)
             if patch_tags:
                 print('[DoJa] Offline patch:', name)
                 for patch_tag in patch_tags:
@@ -792,6 +964,43 @@ def merge_jar(original: Path, class_dir: Path, font_bin: Path, cp932_bin: Path,
         dest.write(cp932_bin, 'doja/cp932.tbl')
 
 
+
+
+
+def verify_ff4a_field_trace_jar(jar_path: Path, app_class: str) -> None:
+    if app_class != 'FF4A':
+        return
+    with zipfile.ZipFile(jar_path, 'r') as archive:
+        payload = archive.read('d.class')
+    if payload.count(_FF4A_FIELD_CATCH_TRACE) != 1:
+        raise RuntimeError('FF4A field exception trace patch is not present exactly once')
+    if _FF4A_FIELD_CATCH in payload:
+        raise RuntimeError('FF4A generic field exception catch remains active')
+    print('[DoJa] FF4A trace   : d.d() generic field error now rethrows the real exception')
+
+
+def verify_ff4a_mainloop_trace_jar(jar_path: Path, app_class: str) -> None:
+    if app_class != 'FF4A':
+        return
+    with zipfile.ZipFile(jar_path, 'r') as archive:
+        payload = archive.read('m.class')
+    if payload.count(_FF4A_MAINLOOP_CATCH_TRACE) != 1:
+        raise RuntimeError('FF4A main-loop exception trace patch is not present exactly once')
+    if _FF4A_MAINLOOP_CATCH in payload:
+        raise RuntimeError('FF4A generic main-loop exception catch remains active')
+    print('[DoJa] FF4A trace   : m.a(String) generic Continue/load error now rethrows real exception')
+
+
+def verify_ff4a_start_trace_jar(jar_path: Path, app_class: str) -> None:
+    if app_class != 'FF4A':
+        return
+    with zipfile.ZipFile(jar_path, 'r') as archive:
+        payload = archive.read('FF4A.class')
+    if payload.count(_FF4A_START_CATCH_TRACE) != 1:
+        raise RuntimeError('FF4A.start exception trace patch is not present exactly once')
+    if _FF4A_START_CATCH in payload:
+        raise RuntimeError('FF4A.start still swallows Continue/load exceptions')
+    print('[DoJa] FF4A trace   : FF4A.start() now rethrows instead of terminate()')
 
 
 def verify_ff4a_performance_jar(jar_path: Path, app_class: str) -> None:
@@ -1050,6 +1259,18 @@ def verify_direct_scratchpad_jar(jar_path: Path) -> None:
             legacy or not http_direct or not lifecycle_ok):
         raise RuntimeError('v46 ScratchPad segment-stream verification failed')
 
+def verify_native_inflater_jar(jar_path: Path) -> None:
+    with zipfile.ZipFile(jar_path, 'r') as archive:
+        names = set(archive.namelist())
+        if 'com/nttdocomo/util/NativeInflater.class' not in names:
+            raise RuntimeError('NativeInflater.class is missing from game.jar')
+        jar_inflater = archive.read('com/nttdocomo/util/JarInflater$RawInflater.class')
+        native = archive.read('com/nttdocomo/util/NativeInflater.class')
+    if b'NativeInflater' not in jar_inflater or b'inflate' not in native:
+        raise RuntimeError('JarInflater RawInflater native ARM fast path is not linked')
+    print('[DoJa] Native inflater: ARM DEFLATE fast path present')
+
+
 def write_metadata(project: Path, jam: dict[str, str], app_name: str, app_class: str,
                    app_param: str, rom_code: str, output_stem: str,
                    scratchpad_crc32: int, scratchpad_size: int,
@@ -1071,7 +1292,7 @@ def write_metadata(project: Path, jam: dict[str, str], app_name: str, app_class:
         ('NDS-Canvas-Size', '%dx%d' % (video['canvas_w'], video['canvas_h'])),
         ('NDS-Logical-Canvas-Size', '%dx%d' % (video['logical_w'], video['logical_h'])),
         ('NDS-Output-Rect', '%d,%d,%d,%d' % (video['output_x'], video['output_y'], video['output_w'], video['output_h'])),
-        ('NDS-Bytecode-Profile', 'FF4A-v48-stored-lz77' if app_class == 'FF4A' else 'generic-v48-lz77'),
+        ('NDS-Bytecode-Profile', 'FF4A-v59-continue-exception-trace' if app_class == 'FF4A' else 'generic-v59-lz77'),
     ]
     prop_text = ''.join(k + ': ' + v + '\r\n' for k, v in props) + '\r\n'
     internal = re.sub(r'[^A-Za-z0-9]', '', output_stem).upper()[:12] or 'DOJAGAME'
@@ -1080,7 +1301,7 @@ def write_metadata(project: Path, jam: dict[str, str], app_name: str, app_class:
 #define PSTROS_STANDALONE_GAME_H
 
 #define DOJA_PORT_BUILD_VERSION {PORT_VERSION}
-#define DOJA_PORT_VERSION_TEXT "v48 Empty"
+#define DOJA_PORT_VERSION_TEXT "v59 Empty"
 #define STANDALONE_APP_NAME "{c_escape(app_name)}"
 #define STANDALONE_MAIN_CLASS "{c_escape(app_class)}"
 #define DOJA_APP_CLASS "{c_escape(app_class)}"
@@ -1127,7 +1348,7 @@ def write_metadata(project: Path, jam: dict[str, str], app_name: str, app_class:
     mk = f'''# Auto-generated by tools/prepare_doja.py.
 TARGET := {output_stem}
 TEXT1 := {app_name}
-TEXT2 := DoJa v48 Empty
+TEXT2 := DoJa v59 Empty
 TEXT3 := {app_class}
 NDS_GAME_CODE := \\#\\#\\#\\#
 NDS_MAKER_CODE := HB
@@ -1186,6 +1407,7 @@ def main() -> int:
     parser.add_argument('--name')
     parser.add_argument('--screen-x', type=int)
     parser.add_argument('--screen-y', type=int)
+    parser.add_argument('--save', help='Optional existing DJSP .sav/.djs overlay to import into the ScratchPad at build time')
     args = parser.parse_args()
 
     project = Path(__file__).resolve().parents[1]
@@ -1224,7 +1446,7 @@ def main() -> int:
         })
     video = resolve_video_config(jam, args.screen_x, args.screen_y)
     app_name = (args.name or jar.stem).strip()
-    output_stem = safe_stem(app_name) + '_doja_v48'
+    output_stem = safe_stem(app_name)
     corpse_party_compat = detect_corpse_party_compat(jar)
     work = project / 'build_doja'
     shutil.rmtree(work, ignore_errors=True)
@@ -1249,11 +1471,55 @@ def main() -> int:
     print('[DoJa] NDS scale : %s -> %dx%d at X=%d Y=%d (BG PA=%d PD=%d)' % (video['mode'], video['output_w'], video['output_h'], video['output_x'], video['output_y'], video['pa'], video['pd']))
     print('[DoJa] Compat    :', 'FF4A exact-signature performance build' if app_class == 'FF4A' else ('Corpse Party exact-signature patch' if corpse_party_compat else 'generic game'))
     normalized_sp, _sp_mode = normalize_scratchpad(sp, jam, work / 'scratchpad_payload.bin')
+
+    # Optional save migration.  DJSP save files are sparse 256-byte overlays
+    # tied to the exact ScratchPad size + CRC that created them.  Importing
+    # them at build time avoids FAT/DLDI probing during boot and also lets an
+    # old pre-STORED FF4A save be migrated safely before resource repacking.
+    save_path = _find_save_candidate(args.save, jar, jam_path, sp)
+    save_overlay = _parse_djsp_overlay(save_path) if save_path else None
+    save_imported = False
+    if save_overlay is not None:
+        raw = normalized_sp.read_bytes()
+        if save_overlay['base_size'] == len(raw) and save_overlay['base_crc'] == _crc32(raw):
+            raw = _apply_djsp_overlay(raw, save_overlay, 'original')
+            normalized_sp.write_bytes(raw)
+            save_imported = True
+            jam['NDSImportedSave'] = 'DJSP-pre-stored'
+            jam['NDSImportedSaveChunks'] = str(save_overlay['count'])
+
     if app_class == 'FF4A':
-        normalized_sp = work / 'scratchpad_stored.bin'
-        stored_stats = repack_ff4a_scratchpad_stored(work / 'scratchpad_payload.bin', normalized_sp)
-        jam['SPsize'] = str(stored_stats['new_size'])
-        jam['NDSResourcePackMode'] = 'stored'
+        # v59: FF4A contains real Continue data inside the original ScratchPad.
+        # Do not relocate the nested resource JARs. Preserve the game-visible
+        # payload exactly; NativeInflater handles their DEFLATE on ARM.
+        original_payload = (work / 'scratchpad_payload.bin').read_bytes()
+        normalized_sp = work / 'scratchpad_original_layout.bin'
+        normalized_sp.write_bytes(original_payload)
+        jam['SPsize'] = str(len(original_payload))
+        jam['NDSResourcePackMode'] = 'original-layout-native-deflate'
+        jam['NDSBundledSaveMode'] = 'preserve-scratchpad'
+        jam['NDSBundledSaveBytes'] = '25600'
+        print('[DoJa] FF4A SP layout : preserved byte-for-byte')
+        print('[DoJa] FF4A Continue  : bundled state 0..25599 preserved')
+        print('[DoJa] FF4A resources : original DEFLATE, ARM native inflater')
+
+    if save_overlay is not None and not save_imported:
+        raw = normalized_sp.read_bytes()
+        if save_overlay['base_size'] == len(raw) and save_overlay['base_crc'] == _crc32(raw):
+            raw = _apply_djsp_overlay(raw, save_overlay, 'prepared/STORED')
+            normalized_sp.write_bytes(raw)
+            save_imported = True
+            jam['NDSImportedSave'] = 'DJSP-prepared'
+            jam['NDSImportedSaveChunks'] = str(save_overlay['count'])
+        else:
+            raise ValueError(
+                'Existing DJSP save does not match either the original or prepared ScratchPad. '
+                'Expected original size=%d crc=%08X or prepared size=%d crc=%08X, save has size=%d crc=%08X' %
+                (len((work / 'scratchpad_payload.bin').read_bytes()), _crc32((work / 'scratchpad_payload.bin').read_bytes()),
+                 len(raw), _crc32(raw), save_overlay['base_size'], save_overlay['base_crc']))
+
+    if save_path is None:
+        print('[DoJa] Existing save: none (fresh ScratchPad base)')
     class_dir = compile_compat(project, tool_root, work)
     font_bin = work / 'jpfont.bin'
     font_used, glyph_count = generate_font(jar, normalized_sp, font_bin, args.font)
@@ -1269,7 +1535,7 @@ def main() -> int:
         single_count, double_count, reverse_count, cp932_bin.stat().st_size))
     merge_jar(jar, class_dir, font_bin, cp932_bin,
               project / 'embedded' / 'game.jar', app_name, app_class)
-    # v48 Empty converts the device-visible ScratchPad to an embedded Nintendo
+    # v59 Empty converts the device-visible ScratchPad to an embedded Nintendo
     # LZ77 stream automatically. The game still sees the original uncompressed
     # bytes after the ARM9 expands it once at boot.
     native_payload = normalized_sp.read_bytes()
@@ -1280,9 +1546,13 @@ def main() -> int:
     write_prepared_jam(project / 'build_doja' / 'prepared_game.jam', jam, len(native_payload))
     verify_cp932_jar(project / 'embedded' / 'game.jar')
     verify_doja_v46_api(project / 'embedded' / 'game.jar')
+    verify_ff4a_field_trace_jar(project / 'embedded' / 'game.jar', app_class)
+    verify_ff4a_mainloop_trace_jar(project / 'embedded' / 'game.jar', app_class)
+    verify_ff4a_start_trace_jar(project / 'embedded' / 'game.jar', app_class)
     verify_ff4a_performance_jar(project / 'embedded' / 'game.jar', app_class)
     verify_offline_jar(project / 'embedded' / 'game.jar')
     verify_direct_scratchpad_jar(project / 'embedded' / 'game.jar')
+    verify_native_inflater_jar(project / 'embedded' / 'game.jar')
     # Keep the inherited native audio object linkable. DoJa audio is intentionally
     # stubbed in this first milestone, so this contains no sample data.
     (project / 'embedded' / 'osnd_native.pcm').write_bytes(b'PPCM\x01\x00\x00\x00')
@@ -1298,7 +1568,7 @@ def main() -> int:
     print('[DoJa] Output ROM  :', output_stem + '.nds')
     print('[DoJa] Marker      :', prepared_marker)
     print('[OK] game.jar: all entries STORED for fast class/resource loading')
-    print('[OK] ScratchPad: automatic Nintendo LZ77 outer pack')
+    print('[OK] ScratchPad: original game-visible layout + Nintendo LZ77 outer pack')
     print('[OK] Prepared JAM:', project / 'build_doja' / 'prepared_game.jam')
     print('[NEXT] build-doja.bat will call build.bat automatically')
     return 0
